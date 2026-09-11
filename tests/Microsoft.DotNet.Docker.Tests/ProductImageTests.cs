@@ -1,4 +1,4 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -9,6 +9,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using FluentAssertions;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -20,10 +21,12 @@ namespace Microsoft.DotNet.Docker.Tests
         {
             DockerHelper = new DockerHelper(outputHelper);
             OutputHelper = outputHelper;
+            SyftHelper = new SyftHelper(DockerHelper, OutputHelper);
         }
 
         protected DockerHelper DockerHelper { get; }
         protected ITestOutputHelper OutputHelper { get; }
+        protected SyftHelper SyftHelper { get; }
         protected abstract DotNetImageRepo ImageRepo { get; }
 
         /// <summary>
@@ -41,6 +44,13 @@ namespace Microsoft.DotNet.Docker.Tests
         {
             if (imageData.OS.Contains("alpine") && imageData.IsArm)
             {
+                return;
+            }
+
+            if (imageData.OS.Contains("resolute"))
+            {
+                OutputHelper.WriteLine("Skipping insecure files check for Ubuntu 26.04 (resolute)."
+                    + " Remove this check when https://github.com/dotnet/dotnet-docker/issues/7054 is resolved.");
                 return;
             }
 
@@ -106,20 +116,20 @@ namespace Microsoft.DotNet.Docker.Tests
             string expectedUser;
             if (imageData.IsDistroless && ImageRepo != DotNetImageRepo.SDK)
             {
-                if (imageData.OS.StartsWith(OS.Mariner) || imageData.OS.StartsWith(OS.AzureLinux))
-                {
-                    expectedUser = "app";
-                }
-                else
-                {
-                    expectedUser = imageData.NonRootUID.ToString();
-                }
+                expectedUser = imageData.NonRootUID.ToString();
             }
             // For Windows, only Nano Server defines a user, which seems wrong.
             // I've logged https://dev.azure.com/microsoft/OS/_workitems/edit/40146885 for this.
-            else if (imageData.OS.StartsWith(OS.NanoServer))
+            else if (imageData.OS.Family == OSFamily.NanoServer)
             {
                 expectedUser = "ContainerUser";
+            }
+            // Azure Linux 4.0 and newer base images default to USER root, unlike 3.0
+            // which left the user unset. Our non-distroless images inherit this from
+            // the base image without resetting it.
+            else if (imageData.OS.Family == OSFamily.AzureLinux && imageData.OS.Version != "3.0")
+            {
+                expectedUser = "root";
             }
             else
             {
@@ -133,10 +143,9 @@ namespace Microsoft.DotNet.Docker.Tests
 
         protected void VerifyNonRootUID(ProductImageData imageData)
         {
-            if ((imageData.Version.Major == 6 && (!imageData.IsDistroless || imageData.OS.StartsWith(OS.Mariner)))
-                || imageData.IsWindows)
+            if (imageData.IsWindows)
             {
-                OutputHelper.WriteLine("UID check is only relevant for Linux images running .NET versions >= 8.0 and distroless images besides CBL Mariner.");
+                OutputHelper.WriteLine("UID check is only relevant for Linux images");
                 return;
             }
 
@@ -166,193 +175,93 @@ namespace Microsoft.DotNet.Docker.Tests
             Assert.True(uid <= 60000);
         }
 
-        private IEnumerable<string> GetInstalledRpmPackages(ProductImageData imageData)
-        {
-            string rootPath = imageData.IsDistroless ? "/rootfs" : "/";
-            // Get list of installed RPM packages
-            string command = $"-c \"rpm -qa -r {rootPath} | sort\"";
-
-            string imageTag;
-            if (imageData.IsDistroless)
-            {
-                imageTag = DockerHelper.BuildDistrolessHelper(ImageRepo, imageData, rootPath);
-            }
-            else
-            {
-                imageTag = imageData.GetImage(ImageRepo, DockerHelper);
-            }
-
-            string installedPackages = DockerHelper.Run(
-                image: imageTag,
-                command: command,
-                name: imageData.GetIdentifier("PackageInstallation"),
-                optionalRunArgs: "--entrypoint /bin/sh");
-
-            return installedPackages.Split(Environment.NewLine);
-        }
-
-        protected void VerifyExpectedInstalledRpmPackages(
-            ProductImageData imageData, IEnumerable<string> expectedPackages)
-        {
-            if ((!imageData.OS.StartsWith(OS.Mariner) && !imageData.OS.StartsWith(OS.AzureLinux))
-                || imageData.IsDistroless || imageData.Version.Major > 6)
-            {
-                return;
-            }
-
-            if (imageData.Arch == Arch.Arm64)
-            {
-                OutputHelper.WriteLine("Skip test until Arm64 Dockerfiles install packages instead of tarballs");
-                return;
-            }
-
-            foreach (string expectedPackage in expectedPackages)
-            {
-                bool installed = GetInstalledRpmPackages(imageData).Any(pkg => pkg.StartsWith(expectedPackage));
-                Assert.True(installed, $"Package '{expectedPackage}' is not installed.");
-            }
-        }
-
         public static IEnumerable<EnvironmentVariableInfo> GetCommonEnvironmentVariables()
         {
-            yield return new EnvironmentVariableInfo("DOTNET_RUNNING_IN_CONTAINER", "true");
+            yield return EnvironmentVariableInfo.Require("DOTNET_RUNNING_IN_CONTAINER", "true");
         }
 
         /// <summary>
         /// Verifies that the packages installed are correct and scannable by security tools.
         /// </summary>
-        internal static void VerifyInstalledPackagesBase(
+        internal void VerifyInstalledPackagesBase(
             ProductImageData imageData,
             DotNetImageRepo imageRepo,
-            DockerHelper dockerHelper,
-            ITestOutputHelper outputHelper,
             IEnumerable<string> extraExcludePaths = null)
         {
-            IEnumerable<string> expectedPackages = GetExpectedPackages(imageData, imageRepo);
-            IEnumerable<string> actualPackages = GetInstalledPackages(imageData, imageRepo, dockerHelper, extraExcludePaths);
+            if (imageData.OS.IsUnstable)
+            {
+                OutputHelper.WriteLine(
+                    $"Skipping installed-packages verification for unstable OS '{imageData.OS.DisplayName}'."
+                    + " The package set for pre-release distros is expected to change and is not asserted by tests.");
+                return;
+            }
 
-            ComparePackages(expectedPackages, actualPackages, imageData.IsDistroless, outputHelper);
+            IEnumerable<string> expectedPackages = GetExpectedPackages(imageData, imageRepo);
+            IEnumerable<string> actualPackages = GetInstalledPackages(imageData, imageRepo, extraExcludePaths);
+
+            string imageName = imageData.GetImage(imageRepo, DockerHelper, skipPull: true);
+            ComparePackages(expectedPackages, actualPackages, imageData.IsDistroless, imageName, OutputHelper);
         }
 
         internal static void ComparePackages(
             IEnumerable<string> expectedPackages,
             IEnumerable<string> actualPackages,
             bool isDistroless,
+            string imageName,
             ITestOutputHelper outputHelper)
         {
             outputHelper.WriteLine($"Expected Packages: [ {string.Join(", ", expectedPackages)} ]");
+            outputHelper.WriteLine($"Actual Packages: [ {string.Join(", ", actualPackages)} ]");
 
             // Verify we only include strictly necessary packages in distroless images
             if (isDistroless)
             {
-                outputHelper.WriteLine($"Actual Packages: [ {string.Join(", ", actualPackages)} ]");
-                Assert.Equal(expectedPackages, actualPackages);
+                actualPackages.Should().BeEquivalentTo(expectedPackages, because: $"image {imageName} is distroless");
                 return;
             }
 
             // Verify satisfy .NET dependencies on non-distroless images.
             // There will be additional packages from the distro.
-            IEnumerable<string> missingPackages = expectedPackages.Except(actualPackages);
-            if (missingPackages.Any())
-            {
-                outputHelper.WriteLine($"Missing packages: [ {string.Join(", ", missingPackages)} ]");
-            }
-
-            Assert.Empty(missingPackages);
+            expectedPackages.Should().BeSubsetOf(actualPackages, because: $"image {imageName} is not distroless");
         }
 
-        internal static IEnumerable<string> GetInstalledPackages(
+        /// <summary>
+        /// Gets a list of all unique linux packages in the image.
+        /// </summary>
+        /// <param name="excludePaths">
+        /// These paths will be excluded from image scanning.
+        /// </param>
+        /// <returns></returns>
+        internal IEnumerable<string> GetInstalledPackages(
             ProductImageData imageData,
             DotNetImageRepo imageRepo,
-            DockerHelper dockerHelper,
             IEnumerable<string> extraExcludePaths = null)
         {
-            JsonNode output = GetSyftOutput("package-info", imageData, imageRepo, dockerHelper, extraExcludePaths);
+            JsonNode output = SyftHelper.Scan(imageData, imageRepo, extraExcludePaths);
+
             return ((JsonArray)output["artifacts"])
                 .Select(artifact => artifact["name"]?.ToString())
                 // Syft can sometimes detect duplicates of packages if they have a distro-specific version suffix. Syft
                 // will report the distro package version and the binary package version as separate.
                 //
                 // openssl                      1.1.1k                binary
-                // openssl                      1.1.1k-29.cm2         rpm
-                //                              ^ Mariner specific version
+                // openssl                      1.1.1k-29.azl3        rpm
+                //                              ^ Azure Linux specific version
                 //
                 // So we need to remove duplicates.
                 .Distinct();
         }
 
-        protected static JsonNode GetSyftOutput(
-            string syftContainerName,
-            ProductImageData imageData,
-            DotNetImageRepo imageRepo,
-            DockerHelper dockerHelper,
-            IEnumerable<string> extraExcludePaths = null)
-        {
-            string syftImage = $"{Config.GetVariableValue("syft|repo")}:{Config.GetVariableValue("syft|tag")}";
-            dockerHelper.Pull(syftImage);
-
-            string imageToInspect = imageData.GetImage(imageRepo, dockerHelper);
-
-            string outputContainerFilePath = "/artifacts/output.json";
-            string tempDir = null;
-            string outputContents = null;
-
-            // Ignore the dotnet folder, or else syft will report all the packages in the .NET Runtime. We only care
-            // about the packages from the linux distro for this test.
-            extraExcludePaths ??= [];
-            extraExcludePaths = extraExcludePaths.Append("/usr/share/dotnet");
-            IEnumerable<string> excludeArgs = extraExcludePaths.Select(path => $"--exclude {path}");
-
-            string[] args = [
-                "scan",
-                $"docker:{imageToInspect}",
-                $"-o json={outputContainerFilePath}",
-                ..excludeArgs
-            ];
-
-            try
-            {
-                dockerHelper.Run(
-                    syftImage,
-                    syftContainerName,
-                    string.Join(' ', args),
-                    skipAutoCleanup: true,
-                    useMountedDockerSocket: true);
-
-                tempDir = Directory.CreateDirectory(
-                    Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())).FullName;
-
-                dockerHelper.Copy($"{syftContainerName}:{outputContainerFilePath}", tempDir);
-
-                string outputLocalFilePath = Path.Join(tempDir, Path.GetFileName(outputContainerFilePath));
-                outputContents = File.ReadAllText(outputLocalFilePath);
-            }
-            finally
-            {
-                if (!string.IsNullOrEmpty(tempDir))
-                {
-                    Directory.Delete(tempDir, true);
-                }
-                dockerHelper.DeleteContainer(syftContainerName);
-            }
-
-            return JsonNode.Parse(outputContents)
-                    ?? throw new JsonException($"Unable to parse the output as JSON:{Environment.NewLine}{outputContents}");
-        }
-
         internal static IEnumerable<string> GetExpectedPackages(ProductImageData imageData, DotNetImageRepo imageRepo)
         {
-            IEnumerable<string> expectedPackages = imageData.ImageVariant.HasFlag(DotNetImageVariant.AOT)
-                ? GetAotDepsPackages(imageData)
-                : GetRuntimeDepsPackages(imageData);
+            IEnumerable<string> expectedPackages = GetRuntimeDepsPackages(imageData);
 
             if (imageData.IsDistroless)
             {
                 expectedPackages = [..expectedPackages, ..GetDistrolessBasePackages(imageData)];
             }
 
-            if (imageData.ImageVariant.HasFlag(DotNetImageVariant.Extra)
-                || (imageRepo == DotNetImageRepo.SDK && imageData.Version.Major != 6))
+            if (imageData.ImageVariant.HasFlag(DotNetImageVariant.Extra) || imageRepo == DotNetImageRepo.SDK)
             {
                 expectedPackages = [..expectedPackages, ..GetExtraPackages(imageData)];
             }
@@ -362,136 +271,157 @@ namespace Microsoft.DotNet.Docker.Tests
 
         private static IEnumerable<string> GetDistrolessBasePackages(ProductImageData imageData) => imageData switch
             {
-                { OS: string os } when os.Contains(OS.AzureLinux) => new[]
+                { OS.Family: OSFamily.AzureLinux } => new[]
                     {
+                        "SymCrypt",
+                        "SymCrypt-OpenSSL",
                         "azurelinux-release",
                         "distroless-packages-minimal",
                         "filesystem",
                         "prebuilt-ca-certificates",
                         "tzdata"
                     },
-                { OS: string os } when os.Contains(OS.Mariner) => new[]
-                    {
-                        "distroless-packages-minimal",
-                        "filesystem",
-                        "mariner-release",
-                        "prebuilt-ca-certificates",
-                        "tzdata"
-                    },
-                { OS: string os } when os.Contains(OS.ChiseledSuffix) => new[]
+                { OS.Family: OSFamily.Ubuntu } => new[]
                     {
                         "base-files"
                     },
-                _ => throw new NotSupportedException()
+                _ => throw new NotSupportedException($"Unsupported distroless OS '{imageData.OS}'")
             };
 
-        private static IEnumerable<string> GetAotDepsPackages(ProductImageData imageData) => imageData switch
+        private static IEnumerable<string> GetRuntimeDepsPackages(ProductImageData imageData) {
+            IEnumerable<string> packages = imageData switch
             {
-                { OS: OS.Mariner20Distroless, Version: ImageVersion version }
-                        when version.Major == 6 => new[]
-                    {
-                        "e2fsprogs-libs",
+                { OS.Family: OSFamily.AzureLinux } =>
+                    [
                         "glibc",
-                        "krb5",
                         "libgcc",
                         "openssl",
                         "openssl-libs",
-                        "prebuilt-ca-certificates",
-                        "zlib"
-                    },
-                { OS: OS.Mariner20, Version: ImageVersion version }
-                        when version.Major == 6 => new[]
-                    {
-                        "glibc",
-                        "icu",
-                        "krb5",
-                        "libgcc",
-                        "openssl-libs",
-                        "zlib"
-                    },
-                { OS: string os } when os.Contains(OS.Mariner) || os.Contains(OS.AzureLinux) => new[]
-                    {
-                        "glibc",
-                        "libgcc",
-                        "openssl-libs",
-                        "zlib"
-                    },
-                { OS: string os } when os.Contains(OS.Jammy) => new[]
-                    {
+                        "libstdc++"
+                    ],
+                { OS: { Family: OSFamily.Ubuntu, Version: "22.04"} } =>
+                    [
                         "ca-certificates",
+                        "gcc-12-base",
                         "libc6",
                         "libgcc-s1",
                         "libssl3",
-                        "zlib1g"
-                    },
-                { OS: string os } when os.Contains(OS.Noble) => new[]
-                    {
+                        "openssl",
+                        "libstdc++6"
+                    ],
+                { OS: var os } when os == OS.ResoluteChiseled =>
+                    [
                         "ca-certificates",
+                        "gcc-16-base",
+                        ..GetResoluteChiseledArchSpecificPackages(imageData),
                         "libc6",
                         "libgcc-s1",
                         "libssl3t64",
+                        "libstdc++6",
+                        "libzstd",
+                        "libzstd1",
+                        "openssl",
+                        "openssl-provider-legacy",
+                        "zlib",
                         "zlib1g"
-                    },
-                { OS: OS.Focal } => new[]
-                    {
+                    ],
+                { OS: { Family: OSFamily.Ubuntu, Version: "26.04" } } =>
+                    [
                         "ca-certificates",
+                        "gcc-16-base",
                         "libc6",
                         "libgcc-s1",
-                        "libgssapi-krb5-2",
-                        "libicu66",
-                        "libssl1.1",
-                        "zlib1g"
-                    },
-                { OS: string os } when os.Contains(OS.Alpine) => new[]
-                    {
+                        "libssl3t64",
+                        "openssl",
+                        "libstdc++6"
+                    ],
+                { OS: var os } when os == OS.NobleChiseled =>
+                    [
+                        "ca-certificates",
+                        "gcc-14-base",
+                        "gcc-14",
+                        "libc6",
+                        "libgcc-s1",
+                        "libssl3t64",
+                        "openssl",
+                        "libstdc++6"
+                    ],
+                { OS: { Family: OSFamily.Ubuntu, Version: "24.04" } } =>
+                    [
+                        "ca-certificates",
+                        "gcc-14-base",
+                        "libc6",
+                        "libgcc-s1",
+                        "libssl3t64",
+                        "openssl",
+                        "libstdc++6"
+                    ],
+                { OS.Family: OSFamily.Alpine } =>
+                    [
                         "ca-certificates-bundle",
                         "libgcc",
                         "libssl3",
-                        "zlib"
-                    },
-                { OS: OS.BookwormSlim } => new[]
-                    {
+                        "libstdc++"
+                    ],
+                { OS: var os } when os == OS.BookwormSlim =>
+                    [
                         "ca-certificates",
                         "libc6",
                         "libgcc-s1",
                         "libicu72",
                         "libssl3",
                         "tzdata",
-                        "zlib1g"
-                    },
-                { OS: OS.BullseyeSlim } => new[]
-                    {
-                        "ca-certificates",
-                        "libc6",
-                        "libgcc-s1", // Listed as libgcc1 in the Dockerfile
-                        "libgssapi-krb5-2",
-                        "libicu67",
-                        "libssl1.1",
-                        "zlib1g"
-                    },
-                _ => throw new NotSupportedException()
+                        "libstdc++6"
+                    ],
+                _ => throw new NotSupportedException($"Unknown runtime-deps packages for OS '{imageData.OS}'")
             };
 
-        private static IEnumerable<string> GetRuntimeDepsPackages(ProductImageData imageData) {
-            string libstdcppPkgName = imageData.OS.Contains(OS.Mariner) || imageData.OS.Contains(OS.AzureLinux) || imageData.OS.Contains(OS.Alpine)
-                ? "libstdc++"
-                : "libstdc++6";
-            return GetAotDepsPackages(imageData).Append(libstdcppPkgName);
+            // zlib is not required for .NET 9+
+            // - https://github.com/dotnet/dotnet-docker/issues/5687
+            if (imageData.Version.Major == 8)
+            {
+                packages = [..packages, GetZLibPackage(imageData.OS)];
+            }
+
+            return packages;
         }
+
+        private static string GetZLibPackage(OSInfo os)
+        {
+            OSFamily[] unversionedZLibOSFamilies = [OSFamily.Alpine, OSFamily.AzureLinux];
+            return unversionedZLibOSFamilies.Contains(os.Family) ? "zlib" : "zlib1g";
+        }
+
+        /// <summary>
+        /// Syft detects gcc-16 as an additional binary package on amd64 resolute chiseled images.
+        /// </summary>
+        private static IEnumerable<string> GetResoluteChiseledArchSpecificPackages(ProductImageData imageData) =>
+            imageData.Arch == Arch.Amd64 ? ["gcc-16"] : [];
 
         private static IEnumerable<string> GetExtraPackages(ProductImageData imageData) => imageData switch
             {
-                { IsDistroless: true, OS: string os } when os.Contains(OS.Mariner) || os.Contains(OS.AzureLinux) => new[]
+                { IsDistroless: true, OS.Family: OSFamily.AzureLinux } => new[]
                     {
                         "icu",
                         "tzdata"
                     },
-                { OS: string os } when os.Contains(OS.ChiseledSuffix) => new[]
+                { OS: var os } when os == OS.ResoluteChiseled => new[]
+                    {
+                        "icu",
+                        "libicu78",
+                        "tzdata"
+                    },
+                { OS: var os } when os == OS.NobleChiseled => new[]
+                    {
+                        "libicu74",
+                        "tzdata"
+                    },
+                { OS: var os } when os == OS.JammyChiseled => new[]
                     {
                         "libicu70",
                         "tzdata"
                     },
-                { OS: string os } when os.Contains(OS.Alpine) => new[]
+                { OS.Family: OSFamily.Alpine } => new[]
                     {
                         "icu-data-full",
                         "icu-libs",

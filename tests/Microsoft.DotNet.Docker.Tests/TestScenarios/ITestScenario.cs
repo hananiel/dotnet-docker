@@ -10,5 +10,5 @@ namespace Microsoft.DotNet.Docker.Tests;
 
 public interface ITestScenario
 {
-    public Task ExecuteAsync();
+    Task ExecuteAsync();
 }

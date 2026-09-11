@@ -1,6 +1,6 @@
 # Push Docker Images to Docker Hub
 
-This sample demonstrates hot to push .NET images to the [Docker Hub](https://hub.docker.com/) container registry. The instructions are based on the [.NET Docker Sample](README.md).
+This sample demonstrates how to push .NET images to the [Docker Hub](https://hub.docker.com/) container registry. The instructions are based on the [.NET Docker Sample](README.md).
 
 Similar instructions are also available to [push to Azure Container Registry](push-image-to-acr.md).
 
@@ -10,7 +10,7 @@ The following instructions are a subset of the [.NET Docker Sample](README.md) i
 
 ```console
 cd samples
-cd dotnetapp
+cd ConsoleApp
 docker build --pull -t dotnetapp .
 ```
 
@@ -34,7 +34,8 @@ You need to [login to Docker Hub](https://docs.docker.com/docker-hub/accounts/) 
 
 There are a couple ways of passing a password to `docker login`. These instructions [pass the password to stdin](https://github.com/docker/cli/pull/218) via a text file called password-dh.txt. Make sure to save to a location not managed by source control (to avoid accidental disclosure).
 
-> Note: The instructions use example values that need to be changed to for your environment, specifically the password location, and the user account. More simply, make sure to change "rich" and "richlander" to something else.
+> [!NOTE]
+> The instructions use example values that need to be changed to for your environment, specifically the password location, and the user account. More simply, make sure to change "rich" and "richlander" to something else.
 
 Login on Windows:
 

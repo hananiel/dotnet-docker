@@ -10,14 +10,14 @@ RUN powershell -Command " `
         $ErrorActionPreference = 'Stop'; `
         $ProgressPreference = 'SilentlyContinue'; `
         `
-        Invoke-WebRequest -OutFile mingit.zip https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/MinGit-2.45.2-64-bit.zip; `
-        $mingit_sha256 = '7ed2a3ce5bbbf8eea976488de5416894ca3e6a0347cee195a7d768ac146d5290'; `
+        Invoke-WebRequest -OutFile mingit.zip https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/MinGit-2.55.0.5-64-bit.zip; `
+        $mingit_sha256 = '56d7b226b7693196cfc71fef26568f536c4a021ab6c37ff2db4287bed908e96e'; `
         if ((Get-FileHash mingit.zip -Algorithm sha256).Hash -ne $mingit_sha256) { `
             Write-Host 'CHECKSUM VERIFICATION FAILED!'; `
             exit 1; `
         }; `
         mkdir MinGit; `
-        tar -oxzf mingit.zip -C MinGit; `
+        tar --gzip --extract --no-same-owner --file mingit.zip --directory MinGit; `
         Remove-Item -Force mingit.zip"
 
 RUN powershell -Command " `
@@ -25,22 +25,39 @@ RUN powershell -Command " `
         $ProgressPreference = 'SilentlyContinue'; `
         `
         # Retrieve .NET SDK
-        $sdk_version = '8.0.303'; `
-        Invoke-WebRequest -OutFile dotnet.zip https://dotnetcli.azureedge.net/dotnet/Sdk/$sdk_version/dotnet-sdk-$sdk_version-win-x64.zip; `
-        $dotnet_sha512 = 'be8a71f8819ceb35937c158107a34a77d0ee4f7ad761241d1a5a49842288f280b1f521dc3dcbcd2fa8a571de740d873e40b80615c2b345e2501e1875844b0350'; `
-        if ((Get-FileHash dotnet.zip -Algorithm sha512).Hash -ne $dotnet_sha512) { `
+        $dotnet_sdk_version = '8.0.425'; `
+        $dotnet_version = '8.0.31'; `
+        $dotnet_file = 'dotnet-sdk-' + $dotnet_sdk_version + '-win-x64.zip'; `
+        $dotnet_checksums_file = $dotnet_version + '-sha.txt'; `
+        `
+        Invoke-WebRequest -OutFile $dotnet_file https://builds.dotnet.microsoft.com/dotnet/Sdk/$dotnet_sdk_version/$dotnet_file; `
+        Invoke-WebRequest -OutFile $dotnet_checksums_file https://builds.dotnet.microsoft.com/dotnet/checksums/$dotnet_checksums_file; `
+        `
+        $dotnet_sha512 = ( `
+            (Get-Content $dotnet_checksums_file | Where-Object { `
+                    $_ -match ([regex]::Escape($dotnet_file))` + '$'; `
+            }) -split '\s+' `
+        )[0].ToUpper(); `
+        $actual_hash = (Get-FileHash $dotnet_file -Algorithm SHA512).Hash.ToUpper(); `
+        `
+        if ($dotnet_sha512 -ne $actual_hash) { `
             Write-Host 'CHECKSUM VERIFICATION FAILED!'; `
+            Write-Host 'Expected: ' + $dotnet_sha512; `
+            Write-Host 'Actual:   ' + $actual_hash; `
             exit 1; `
         }; `
+        `
         mkdir dotnet; `
-        tar -oxzf dotnet.zip -C dotnet; `
-        Remove-Item -Force dotnet.zip; `
+        tar --gzip --extract --no-same-owner --file $dotnet_file --directory dotnet; `
+        Remove-Item -Force `
+            $dotnet_file, `
+            $dotnet_checksums_file; `
         `
         # Install PowerShell global tool
-        $powershell_version = '7.4.3'; `
+        $powershell_version = '7.4.20'; `
         Invoke-WebRequest -OutFile PowerShell.Windows.x64.$powershell_version.nupkg https://powershellinfraartifacts-gkhedzdeaghdezhr.z01.azurefd.net/tool/$powershell_version/PowerShell.Windows.x64.$powershell_version.nupkg; `
-        $powershell_sha512 = '1a6c2e52f0b445184d2b6f259c3ae83e6377c902c4ba7ed75edc030c3cbc0c9ded0e6b0cb31206994d70072d588c0f78f318ed91c6524cf3a8c9ae8668638270'; `
-        if ((Get-FileHash PowerShell.Windows.x64.$powershell_version.nupkg -Algorithm sha512).Hash -ne $powershell_sha512) { `
+        $powershell_sha256 = 'bf87b7f235e921fff15378d3331ad2f45ba28fec9f2fc3447235241e0e95de41'; `
+        if ((Get-FileHash PowerShell.Windows.x64.$powershell_version.nupkg -Algorithm sha256).Hash -ne $powershell_sha256) { `
             Write-Host 'CHECKSUM VERIFICATION FAILED!'; `
             exit 1; `
         }; `
@@ -55,8 +72,9 @@ RUN powershell -Command " `
         Get-ChildItem -Exclude 'Microsoft.WindowsDesktop.App' -Path dotnet\shared `
             | Remove-Item -Force -Recurse"
 
+
 # SDK image
-FROM $REPO:8.0.7-nanoserver-ltsc2022
+FROM $REPO:8.0.31-nanoserver-ltsc2022
 
 ENV `
     # Do not generate certificate
@@ -64,7 +82,7 @@ ENV `
     # Do not show first run text
     DOTNET_NOLOGO=true `
     # SDK version
-    DOTNET_SDK_VERSION=8.0.303 `
+    DOTNET_SDK_VERSION=8.0.425 `
     # Enable correct mode for dotnet watch (only mode supported in a container)
     DOTNET_USE_POLLING_FILE_WATCHER=true `
     # Skip extraction of XML docs - generally not useful within an image/container - helps performance

@@ -1,29 +1,30 @@
-FROM arm64v8/golang:1.20 as chisel
+FROM arm64v8/buildpack-deps:noble-curl AS chisel
 
-RUN apt-get update \
-    && apt-get install -y \
-        ca-certificates \
-        file
+RUN apt-get update && apt-get install -y file
 
-RUN go install github.com/canonical/chisel/cmd/chisel@v0.9.1 \
-    && wget -O /usr/bin/chisel-wrapper https://raw.githubusercontent.com/canonical/rocks-toolbox/v1.1.2/chisel-wrapper \
+RUN curl --fail --show-error --location --output chisel.tar.gz https://github.com/canonical/chisel/releases/download/v1.4.2/chisel_v1.4.2_linux_arm64.tar.gz \
+    && chisel_sha384='216f10d4cc461411558fa4ac03fc24e104589126f87657457877389ae8015e1eac4299fcd8557c0dfea3d33342aa3297' \
+    && echo "$chisel_sha384  chisel.tar.gz" | sha384sum -c - \
+    && tar --gzip --extract --no-same-owner --file chisel.tar.gz --directory /usr/bin/ \
+    && rm chisel.tar.gz \
+    && curl --fail --show-error --location --output /usr/bin/chisel-wrapper https://raw.githubusercontent.com/canonical/rocks-toolbox/v1.2.0/chisel-wrapper \
     && chmod 755 /usr/bin/chisel-wrapper
 
 RUN groupadd \
         --gid=1654 \
         app \
-    && useradd -l \
+    && useradd --no-log-init \
         --uid=1654 \
         --gid=1654 \
         --shell /bin/false \
         app \
-    && install -d -m 0755 -o 1654 -g 1654 "/rootfs/home/app" \
-    && mkdir -p "/rootfs/etc" \
+    && install --directory --mode 0755 --owner 1654 --group 1654 "/rootfs/home/app" \
+    && mkdir --parents "/rootfs/etc" \
     && rootOrAppRegex='^\(root\|app\):' \
     && cat /etc/passwd | grep $rootOrAppRegex > "/rootfs/etc/passwd" \
     && cat /etc/group | grep $rootOrAppRegex > "/rootfs/etc/group"
 
-RUN mkdir -p /rootfs/var/lib/dpkg/ \
+RUN mkdir --parents /rootfs/var/lib/dpkg/ \
     && chisel-wrapper --generate-dpkg-status /rootfs/var/lib/dpkg/status -- \
         --release ubuntu-24.04 --root /rootfs \
             base-files_base \

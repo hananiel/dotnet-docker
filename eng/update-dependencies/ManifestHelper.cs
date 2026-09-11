@@ -1,46 +1,95 @@
 ﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
-//
 
-using System;
-using System.IO;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 
-#nullable enable
 namespace Dotnet.Docker;
 
 /// <summary>
 /// Helper class for interacting with manifest files.
 /// </summary>
-public static class ManifestHelper
+public static partial class ManifestHelper
 {
     private const string VariableGroupName = "variable";
     private const string VariablePattern = $"\\$\\((?<{VariableGroupName}>[\\w:\\-.|]+)\\)";
 
     /// <summary>
-    /// Gets the base URL based on the configured context.
+    /// Gets the base URLs based on the configured context.
     /// </summary>
     /// <param name="manifestVariables">JSON object of the variables from the manifest.</param>
     /// <param name="options">Configured options from the app.</param>
-    public static string GetBaseUrl(JObject manifestVariables, Options options) =>
-        ResolveVariableValue(GetBaseUrlVariableName(options.DockerfileVersion, options.SourceBranch, options.VersionSourceName), manifestVariables);
+    public static IEnumerable<string> GetBaseUrls(JObject manifestVariables, SpecificCommandOptions options)
+    {
+        // The upstream branch represents which GitHub branch the current
+        // branch branched off of. This is either "nightly" or "main".
+        var upstreamBranch = ResolveVariableValue("branch", manifestVariables);
+
+        var baseUrlVariableNames = GetBaseUrlVariableNames(
+            dockerfileVersion: options.DockerfileVersion,
+            branch: upstreamBranch,
+            versionSourceName: options.VersionSourceName);
+
+        var baseUrlValues = baseUrlVariableNames
+            .Where(manifestVariables.ContainsKey)
+            .Select(variable => ResolveVariableValue(variable, manifestVariables));
+
+        return baseUrlValues;
+    }
 
     /// <summary>
-    /// Consstructs the name of the base URL variable.
+    /// Constructs the base URL variables for the given dockerfile, branch,
+    /// and product combination.
     /// </summary>
-    /// <param name="dockerfileVersion">Dockerfile version.</param>
-    /// <param name="branch">Name of the branch.</param>
-    public static string GetBaseUrlVariableName(string dockerfileVersion, string branch, string? versionSourceName)
+    /// <param name="dockerfileVersion">
+    /// Dockerfile version. This should be a major.minor version e.g. "8.0",
+    /// "9.0", "10.0".
+    /// </param>
+    /// <param name="branch">
+    /// Name of the branch. This is typically "main" or "nightly".
+    /// </param>
+    public static IEnumerable<string> GetBaseUrlVariableNames(
+        string dockerfileVersion,
+        string branch,
+        string versionSourceName = "",
+        bool sdkOnlyRelease = false)
     {
-        string version = versionSourceName switch
+        string product;
+        if (sdkOnlyRelease)
         {
-            string v when v.Contains("dotnet-monitor") => $"{dockerfileVersion}-monitor",
-            string v when v.Contains("aspire-dashboard") => $"{dockerfileVersion}-aspire-dashboard",
-            _ => dockerfileVersion,
+            product = "sdk";
+        }
+        else
+        {
+            product = versionSourceName switch
+            {
+                string v when v.Contains("dotnet-monitor") => "monitor",
+                string v when v.Contains("aspire-dashboard") => "aspire-dashboard",
+                _ => "dotnet",
+            };
+        }
+
+        return [
+            $"{product}|{dockerfileVersion}|base-url|{branch}",
+            $"{product}|{dockerfileVersion}|base-url|checksums|{branch}",
+        ];
+    }
+
+    /// <summary>
+    /// Constructs the name of the shared base URL variable.
+    /// </summary>
+    /// <param name="releaseState">Release state of the product assets.</param>
+    /// <param name="branch">Name of the branch.</param>
+    public static string GetBaseUrlVariableName(ReleaseState releaseState, string branch)
+    {
+        string qualityString = releaseState switch
+        {
+            ReleaseState.Prerelease => "preview",
+            ReleaseState.Release => "maintenance",
+            _ => throw new NotSupportedException()
         };
 
-        return $"base-url|{version}|{branch}";
+        return $"base-url|public|{qualityString}|{branch}";
     }
 
     public static string GetVersionVariableName(VersionType versionType, string productName, string dockerfileVersion) =>
@@ -73,13 +122,12 @@ public static class ManifestHelper
             ?? throw new ArgumentException($"Manifest does not contain a value for {variableName}");
 
     /// <summary>
-    /// Loads the manifest from the given filename.
+    /// Loads the manifest from the given file path.
     /// </summary>
-    /// <param name="filename">Name, not path, of the manifest file located at the root of the repo.</param>
-    public static JObject LoadManifest(string filename)
+    /// <param name="filePath">Path of the manifest file located at the root of the repo.</param>
+    public static JObject LoadManifest(string filePath)
     {
-        string path = Path.Combine(UpdateDependencies.RepoRoot, filename);
-        string contents = File.ReadAllText(path);
+        string contents = File.ReadAllText(filePath);
         return JObject.Parse(contents);
     }
 
@@ -93,11 +141,19 @@ public static class ManifestHelper
         new($"\"{Regex.Escape(variableName)}\": \"{valuePattern}\"", options);
 
     /// <summary>
+    /// Determines if the given value matches the pattern manifest variable. Does not check if the variable is defined
+    /// in the manifest.
+    /// </summary>
+    /// <param name="value">The value to check.</param>
+    /// <returns>True if the value is a manifest variable, false otherwise.</returns>
+    public static bool IsManifestVariable(string value) => AnyVariableRegex().IsMatch(value);
+
+    /// <summary>
     /// Resolves the value of a variable, recursively resolving any variables referenced in the value.
     /// </summary>
     /// <param name="value">Variable value to be resolved.</param>
     /// <param name="variables">JSON object of the variables from the manifest.</param>
-    private static string ResolveVariables(string value, JObject variables)
+    public static string ResolveVariables(string value, JObject variables)
     {
         MatchCollection matches = Regex.Matches(value, VariablePattern);
         foreach (Match match in matches)
@@ -109,5 +165,7 @@ public static class ManifestHelper
 
         return value;
     }
+
+    [GeneratedRegex(@"^\$\(.*\)$")]
+    private static partial Regex AnyVariableRegex();
 }
-#nullable disable

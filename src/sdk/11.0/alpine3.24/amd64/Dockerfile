@@ -1,0 +1,77 @@
+ARG REPO=mcr.microsoft.com/dotnet/aspnet
+# Installer image
+FROM $REPO:11.0.0-rc.1-alpine3.24-amd64 AS installer
+
+# Install .NET SDK
+RUN dotnet_sdk_version=11.0.100-rc.1.26425.128 \
+    && wget \
+        https://builds.dotnet.microsoft.com/dotnet/Sdk/$dotnet_sdk_version/dotnet-sdk-$dotnet_sdk_version-linux-musl-x64.tar.gz \
+        https://builds.dotnet.microsoft.com/dotnet/Sdk/$dotnet_sdk_version/dotnet-sdk-$dotnet_sdk_version-linux-musl-x64.tar.gz.sha512 \
+    && sha512sum -c dotnet-sdk-$dotnet_sdk_version-linux-musl-x64.tar.gz.sha512 \
+    && mkdir --parents /dotnet \
+    && tar --gzip --extract --no-same-owner --file dotnet-sdk-$dotnet_sdk_version-linux-musl-x64.tar.gz --directory /dotnet ./dnx ./packs ./sdk ./sdk-manifests ./templates ./LICENSE.txt ./ThirdPartyNotices.txt \
+    && rm \
+        dotnet-sdk-$dotnet_sdk_version-linux-musl-x64.tar.gz \
+        dotnet-sdk-$dotnet_sdk_version-linux-musl-x64.tar.gz.sha512
+
+# Download PowerShell
+RUN powershell_version=7.7.0-preview.2 \
+    && wget --output-document PowerShell.Linux.Alpine.$powershell_version.nupkg https://powershellinfraartifacts-gkhedzdeaghdezhr.z01.azurefd.net/tool/$powershell_version/PowerShell.Linux.Alpine.$powershell_version.nupkg \
+    && powershell_sha512='4eba9c9b057620bef0b33d01e04b2d448d6c95896a27d4659c3b173e989f7c900e204b9b987d0587bc8941015f75a4bc2ab8f8cec6dd2e9860ffc02b98b72f62' \
+    && echo "$powershell_sha512  PowerShell.Linux.Alpine.$powershell_version.nupkg" | sha512sum -c -
+
+
+# .NET SDK image
+FROM $REPO:11.0.0-rc.1-alpine3.24-amd64
+
+ENV \
+    # Do not generate certificate
+    DOTNET_GENERATE_ASPNET_CERTIFICATE=false \
+    # Do not show first run text
+    DOTNET_NOLOGO=true \
+    # SDK version
+    DOTNET_SDK_VERSION=11.0.100-rc.1.26425.128 \
+    # Disable the invariant mode (set in base image)
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false \
+    # Enable correct mode for dotnet watch (only mode supported in a container)
+    DOTNET_USE_POLLING_FILE_WATCHER=true \
+    # Skip extraction of XML docs - generally not useful within an image/container - helps performance
+    NUGET_XMLDOC_MODE=skip \
+    # PowerShell telemetry for docker image usage
+    POWERSHELL_DISTRIBUTION_CHANNEL=PSDocker-DotnetSDK-Alpine-3.24
+
+RUN apk add --upgrade --no-cache \
+        curl \
+        git \
+        icu-data-full \
+        icu-libs \
+        libatomic \
+        tzdata
+
+COPY --from=installer ["/dotnet", "/usr/share/dotnet"]
+
+COPY --from=installer ["/PowerShell.Linux.Alpine.7.7.0-preview.2.nupkg", "/"]
+
+# Workaround for https://github.com/dotnet/sdk/issues/55238
+RUN printf '%s\n' \
+        '#!/bin/sh' \
+        'exec /usr/share/dotnet/dotnet dnx "$@"' \
+        > /usr/share/dotnet/dnx \
+    && chmod +x /usr/share/dotnet/dnx \
+    && ln -s /usr/share/dotnet/dnx /usr/bin/dnx \
+    # Trigger first run experience by running arbitrary cmd
+    && dotnet help
+
+# Install PowerShell global tool
+RUN powershell_version=7.7.0-preview.2 \
+    && mkdir --parents /usr/share/powershell \
+    && dotnet tool install --add-source / --tool-path /usr/share/powershell --version $powershell_version PowerShell.Linux.Alpine \
+    && dotnet nuget locals all --clear \
+    && rm PowerShell.Linux.Alpine.$powershell_version.nupkg \
+    && ln -s /usr/share/powershell/pwsh /usr/bin/pwsh \
+    && chmod 755 /usr/share/powershell/pwsh \
+    && chmod 755 /usr/share/powershell/.store/powershell.linux.alpine/$powershell_version/powershell.linux.alpine/$powershell_version/tools/*/any/pwsh \
+    # To reduce image size, remove the copy nupkg that nuget keeps.
+    && find /usr/share/powershell -print | grep -i '.*[.]nupkg$' | xargs rm \
+    # Add ncurses-terminfo-base to resolve psreadline dependency
+    && apk add --no-cache ncurses-terminfo-base

@@ -1,4 +1,4 @@
-FROM azurelinuxpreview.azurecr.io/public/azurelinux/base/core:3.0
+FROM mcr.microsoft.com/azurelinux/base/core:3.0
 
 ENV \
     # UID of the non-root user 'app'
@@ -18,7 +18,6 @@ RUN tdnf install -y \
         libstdc++ \
         openssl-libs \
         tzdata \
-        zlib \
     && tdnf clean all
 
 # Create a non-root user and group
@@ -27,7 +26,7 @@ RUN tdnf install -y \
     && groupadd \
         --gid=$APP_UID \
         app \
-    && useradd -l \
+    && useradd --no-log-init \
         --uid=$APP_UID \
         --gid=$APP_UID \
         --create-home \

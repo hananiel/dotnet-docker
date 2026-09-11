@@ -4,48 +4,57 @@ This image contains the native dependencies needed by .NET. It does not include 
 
 Watch [discussions](https://github.com/dotnet/dotnet-docker/discussions/categories/announcements) for Docker-related .NET announcements.
 
-### New: Ubuntu Chiseled Images
-
-Ubuntu Chiseled .NET images are a type of "distroless" container image that contain only the minimal set of packages .NET needs, with everything else removed.
-These images offer dramatically smaller deployment sizes and attack surface by including only the minimal set of packages required to run .NET applications.
-
-Please see the [Ubuntu Chiseled + .NET](https://github.com/dotnet/dotnet-docker/blob/main/documentation/ubuntu-chiseled.md) documentation page for more info.
-
 ## Featured Tags
 
+* `10.0` (Long-Term Support)
+  * `docker pull mcr.microsoft.com/dotnet/runtime-deps:10.0`
+* `9.0` (Standard Support)
+  * `docker pull mcr.microsoft.com/dotnet/runtime-deps:9.0`
 * `8.0` (Long-Term Support)
   * `docker pull mcr.microsoft.com/dotnet/runtime-deps:8.0`
-* `6.0` (Long-Term Support)
-  * `docker pull mcr.microsoft.com/dotnet/runtime-deps:6.0`
 
 ## Related Repositories
 
 .NET:
 
 * [dotnet](https://mcr.microsoft.com/catalog?search=dotnet): .NET
-* [dotnet/sdk](https://mcr.microsoft.com/product/dotnet/sdk/about): .NET SDK
-* [dotnet/aspnet](https://mcr.microsoft.com/product/dotnet/aspnet/about): ASP.NET Core Runtime
-* [dotnet/runtime](https://mcr.microsoft.com/product/dotnet/runtime/about): .NET Runtime
-* [dotnet/monitor](https://mcr.microsoft.com/product/dotnet/monitor/about): .NET Monitor Tool
-* [dotnet/aspire-dashboard](https://mcr.microsoft.com/product/dotnet/aspire-dashboard/about): .NET Aspire Dashboard
-* [dotnet/samples](https://mcr.microsoft.com/product/dotnet/samples/about): .NET Samples
-* [dotnet/nightly/runtime-deps](https://mcr.microsoft.com/product/dotnet/nightly/runtime-deps/about): .NET Runtime Dependencies (Preview)
+* [dotnet/sdk](https://mcr.microsoft.com/artifact/mar/dotnet/sdk/about): .NET SDK
+* [dotnet/aspnet](https://mcr.microsoft.com/artifact/mar/dotnet/aspnet/about): ASP.NET Core Runtime
+* [dotnet/runtime](https://mcr.microsoft.com/artifact/mar/dotnet/runtime/about): .NET Runtime
+* [dotnet/monitor](https://mcr.microsoft.com/artifact/mar/dotnet/monitor/about): .NET Monitor Tool
+* [dotnet/aspire-dashboard](https://mcr.microsoft.com/artifact/mar/dotnet/aspire-dashboard/about): Aspire Dashboard
+* [dotnet/nightly/runtime-deps](https://mcr.microsoft.com/artifact/mar/dotnet/nightly/runtime-deps/about): .NET Runtime Dependencies (Preview)
+* [dotnet/samples](https://mcr.microsoft.com/artifact/mar/dotnet/samples/about): .NET Samples
 
 .NET Framework:
 
 * [dotnet/framework](https://mcr.microsoft.com/catalog?search=dotnet/framework): .NET Framework, ASP.NET and WCF
-* [dotnet/framework/samples](https://mcr.microsoft.com/product/dotnet/framework/samples/about): .NET Framework, ASP.NET and WCF Samples
+* [dotnet/framework/samples](https://mcr.microsoft.com/artifact/mar/dotnet/framework/samples/about): .NET Framework, ASP.NET and WCF Samples
 
 ## Usage
 
-The [.NET Docker samples](https://github.com/dotnet/dotnet-docker/blob/main/samples/README.md) show various ways to use .NET and Docker together. See [Building Docker Images for .NET Applications](https://docs.microsoft.com/dotnet/core/docker/building-net-docker-images) to learn more.
+The [.NET Docker samples](https://github.com/dotnet/dotnet-docker/blob/main/samples/README.md) show various ways to use .NET and Docker together. See [Introduction to .NET and Docker](https://learn.microsoft.com/dotnet/core/docker/introduction) and [Host ASP.NET Core in Docker containers](https://learn.microsoft.com/aspnet/core/host-and-deploy/docker) to learn more.
 
-* [.NET self-contained Sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/dotnetapp/README.md) - This [sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/dotnetapp/Dockerfile.debian-x64-slim) builds and runs an application as a self-contained application.
+* [Self-contained sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/ConsoleAppSelfContained/README.md) - [Dockerfile](https://github.com/dotnet/dotnet-docker/blob/main/samples/ConsoleAppSelfContained/Dockerfile)
+* [Native AOT sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/AspNetCoreNativeAot/README.md) - [Dockerfile](https://github.com/dotnet/dotnet-docker/blob/main/samples/AspNetCoreNativeAot/Dockerfile)
 
 ## Image Variants
 
 .NET container images have several variants that offer different combinations of flexibility and deployment size.
 The [Image Variants documentation](https://github.com/dotnet/dotnet-docker/blob/main/documentation/image-variants.md) contains a summary of the image variants and their use-cases.
+
+### Distroless images
+
+.NET [distroless container images](https://github.com/dotnet/dotnet-docker/blob/main/documentation/distroless.md) contain only the minimal set of packages .NET needs, with everything else removed.
+Due to their limited set of packages, distroless containers have a minimized security attack surface, smaller deployment sizes, and faster start-up time compared to their non-distroless counterparts.
+They contain the following features:
+
+* Minimal set of packages required for .NET applications
+* Non-root user by default
+* No package manager
+* No shell
+
+.NET offers distroless images for [Azure Linux](https://github.com/dotnet/dotnet-docker/blob/main/documentation/azurelinux.md) and [Ubuntu (Chiseled)](https://github.com/dotnet/dotnet-docker/blob/main/documentation/ubuntu-chiseled.md).
 
 ## Support
 
@@ -57,13 +66,16 @@ The [Image Variants documentation](https://github.com/dotnet/dotnet-docker/blob/
 
 ### Image Update Policy
 
-* We update supported .NET images within 12 hours of any updates to their base images (e.g. debian:bookworm-slim, windows/nanoserver:ltsc2022, etc.).
-* We re-build all .NET images as part of releasing new versions of .NET including new major/minor versions and servicing.
-* Distroless images such as Ubuntu Chiseled have no base image, and as such will only be updated with .NET releases and CVE fixes as described below.
+* **Base Image Updates:** Images are re-built within 12 hours of any updates to their base images (e.g. debian:bookworm-slim, windows/nanoserver:ltsc2022, etc.).
+* **.NET Releases:** Images are re-built as part of releasing new .NET versions. This includes new major versions, minor versions, and servicing releases.
+* **Critical CVEs:** Images are re-built to pick up critical CVE fixes as described by the CVE Update Policy below.
+* **Monthly Re-builds:** Images are re-built monthly, typically on the second Tuesday of the month, in order to pick up lower-severity CVE fixes.
+* **Out-Of-Band Updates:** Images can sometimes be re-built when out-of-band updates are necessary to address critical issues. If this happens, new fixed version tags will be updated according to the [Fixed version tags documentation](https://github.com/dotnet/dotnet-docker/blob/main/documentation/supported-tags.md#fixed-version-tags).
 
 #### CVE Update Policy
 
 .NET container images are regularly monitored for the presence of CVEs. A given image will be rebuilt to pick up fixes for a CVE when:
+
 * We detect the image contains a CVE with a [CVSS](https://nvd.nist.gov/vuln-metrics/cvss) score of "Critical"
 * **AND** the CVE is in a package that is added in our Dockerfile layers (meaning the CVE is in a package we explicitly install or any transitive dependencies of those packages)
 * **AND** there is a CVE fix for the package available in the affected base image's package repository.

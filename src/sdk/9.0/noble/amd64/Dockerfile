@@ -1,5 +1,30 @@
 ARG REPO=mcr.microsoft.com/dotnet/aspnet
-FROM $REPO:9.0.0-preview.6-noble-amd64
+# Installer image
+FROM amd64/buildpack-deps:noble-curl AS installer
+
+# Install .NET SDK
+RUN dotnet_sdk_version=9.0.318 \
+    && dotnet_version=9.0.20 \
+    && curl --fail --show-error --location \
+        --remote-name https://builds.dotnet.microsoft.com/dotnet/Sdk/$dotnet_sdk_version/dotnet-sdk-$dotnet_sdk_version-linux-x64.tar.gz \
+        --remote-name https://builds.dotnet.microsoft.com/dotnet/checksums/$dotnet_version-sha.txt \
+    && sed -i 's/\r$//' $dotnet_version-sha.txt \
+    && sha512sum -c $dotnet_version-sha.txt --ignore-missing \
+    && mkdir --parents /dotnet \
+    && tar --gzip --extract --no-same-owner --file dotnet-sdk-$dotnet_sdk_version-linux-x64.tar.gz --directory /dotnet ./packs ./sdk ./sdk-manifests ./templates ./LICENSE.txt ./ThirdPartyNotices.txt \
+    && rm \
+        dotnet-sdk-$dotnet_sdk_version-linux-x64.tar.gz \
+        $dotnet_version-sha.txt
+
+# Download PowerShell
+RUN powershell_version=7.5.11 \
+    && curl --fail --show-error --location --output PowerShell.Linux.x64.$powershell_version.nupkg https://powershellinfraartifacts-gkhedzdeaghdezhr.z01.azurefd.net/tool/$powershell_version/PowerShell.Linux.x64.$powershell_version.nupkg \
+    && powershell_sha256='926e1abb27219b7f21bd1408fc0558d0b8c14eee5f505ca407ed71a1e1457cd4' \
+    && echo "$powershell_sha256  PowerShell.Linux.x64.$powershell_version.nupkg" | sha256sum -c -
+
+
+# .NET SDK image
+FROM $REPO:9.0.20-noble-amd64
 
 ENV \
     # Do not generate certificate
@@ -7,7 +32,7 @@ ENV \
     # Do not show first run text
     DOTNET_NOLOGO=true \
     # SDK version
-    DOTNET_SDK_VERSION=9.0.100-preview.6.24328.19 \
+    DOTNET_SDK_VERSION=9.0.318 \
     # Enable correct mode for dotnet watch (only mode supported in a container)
     DOTNET_USE_POLLING_FILE_WATCHER=true \
     # Skip extraction of XML docs - generally not useful within an image/container - helps performance
@@ -23,26 +48,21 @@ RUN apt-get update \
         wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Install .NET SDK
-RUN curl -fSL --output dotnet.tar.gz https://dotnetcli.azureedge.net/dotnet/Sdk/$DOTNET_SDK_VERSION/dotnet-sdk-$DOTNET_SDK_VERSION-linux-x64.tar.gz \
-    && dotnet_sha512='ff040c456b096aeac707053517d5f9f5f0df92b6754a4af6b6fe635fd8f4a569589b8241cbad0c5db998dc5bc54682b2f1e4dc4f3d88024a3ef56c1ecc9f4c97' \
-    && echo "$dotnet_sha512  dotnet.tar.gz" | sha512sum -c - \
-    && mkdir -p /usr/share/dotnet \
-    && tar -oxzf dotnet.tar.gz -C /usr/share/dotnet ./packs ./sdk ./sdk-manifests ./templates ./LICENSE.txt ./ThirdPartyNotices.txt \
-    && rm dotnet.tar.gz \
-    # Trigger first run experience by running arbitrary cmd
-    && dotnet help
+COPY --from=installer ["/dotnet", "/usr/share/dotnet"]
+
+COPY --from=installer ["/PowerShell.Linux.x64.7.5.11.nupkg", "/"]
+
+# Trigger first run experience by running arbitrary cmd
+RUN dotnet help
 
 # Install PowerShell global tool
-RUN powershell_version=7.5.0-preview.3 \
-    && curl -fSL --output PowerShell.Linux.x64.$powershell_version.nupkg https://powershellinfraartifacts-gkhedzdeaghdezhr.z01.azurefd.net/tool/$powershell_version/PowerShell.Linux.x64.$powershell_version.nupkg \
-    && powershell_sha512='81d35c63cf0a67d558bed839aed26a2197771ef9d2ed14df0c2ee99c4aa4b7b3da02a3dd7bd12191b6c3822e4cfdd34346c890606374fe76a93f6751be4b2169' \
-    && echo "$powershell_sha512  PowerShell.Linux.x64.$powershell_version.nupkg" | sha512sum -c - \
-    && mkdir -p /usr/share/powershell \
+RUN powershell_version=7.5.11 \
+    && mkdir --parents /usr/share/powershell \
     && dotnet tool install --add-source / --tool-path /usr/share/powershell --version $powershell_version PowerShell.Linux.x64 \
     && dotnet nuget locals all --clear \
     && rm PowerShell.Linux.x64.$powershell_version.nupkg \
     && ln -s /usr/share/powershell/pwsh /usr/bin/pwsh \
     && chmod 755 /usr/share/powershell/pwsh \
+    && chmod 755 /usr/share/powershell/.store/powershell.linux.x64/$powershell_version/powershell.linux.x64/$powershell_version/tools/*/any/pwsh \
     # To reduce image size, remove the copy nupkg that nuget keeps.
     && find /usr/share/powershell -print | grep -i '.*[.]nupkg$' | xargs rm

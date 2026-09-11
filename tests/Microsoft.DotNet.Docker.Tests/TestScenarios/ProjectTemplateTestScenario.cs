@@ -6,40 +6,31 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 using Xunit.Abstractions;
 
 namespace Microsoft.DotNet.Docker.Tests;
 
-public abstract class ProjectTemplateTestScenario : ITestScenario, IDisposable
+public abstract class ProjectTemplateTestScenario : ITestScenario
 {
-    private bool _disposed;
-
+    protected static string OSDockerfileSuffix { get; } = DockerHelper.IsLinuxContainerModeEnabled ? "linux" : "windows";
     protected static string? AdminUser { get; } = DockerHelper.IsLinuxContainerModeEnabled ? "root" : null;
-
     protected static string? NonRootUser { get; } = DockerHelper.IsLinuxContainerModeEnabled ? "app" : "ContainerUser";
 
     protected DockerHelper DockerHelper { get; }
-
     protected ProductImageData ImageData { get; }
-
     protected ITestOutputHelper OutputHelper { get; }
 
-    protected TestSolution TestSolution { get; }
+    protected virtual bool NonRootUserSupported => DockerHelper.IsLinuxContainerModeEnabled;
 
-    protected bool NonRootUserSupported { get; init; }
+    protected virtual bool InjectCustomTestCode { get; } = false;
+    protected virtual bool OutputIsStatic { get; } = false;
+    protected virtual string[] CustomDockerBuildArgs { get; } = [];
 
     protected abstract string SampleName { get; }
-
-    // Target stages refer to stages in TestAppArtifacts/Dockerfile.linux
-    protected abstract string BuildStageTarget { get; }
-
-    protected abstract string? TestStageTarget { get; }
-
-    protected abstract string[] AppStageTargets { get; }
-
+    protected abstract TestDockerfile Dockerfile { get; }
     protected abstract DotNetImageRepo RuntimeImageRepo { get; }
-
     protected abstract DotNetImageRepo SdkImageRepo { get; }
 
     public ProjectTemplateTestScenario(
@@ -50,13 +41,14 @@ public abstract class ProjectTemplateTestScenario : ITestScenario, IDisposable
         DockerHelper = dockerHelper;
         ImageData = imageData;
         OutputHelper = outputHelper;
-        NonRootUserSupported = DockerHelper.IsLinuxContainerModeEnabled && ImageData.Version.Major > 6;
-
-        TestSolution = new(imageData, SampleName, dockerHelper, excludeTests: string.IsNullOrEmpty(TestStageTarget));
     }
 
-    protected string Build(string stageTarget, string[]? customBuildArgs)
+    private string Build(TestSolution testSolution, string stageTarget, string[]? customBuildArgs)
     {
+        const string DockerfileName = "Dockerfile";
+        string dockerfilePath = Path.Combine(DockerHelper.TestArtifactsDir, DockerfileName);
+        File.WriteAllText(dockerfilePath, Dockerfile.Content);
+
         string tag = ImageData.GetIdentifier(stageTarget);
 
         List<string> buildArgs =
@@ -89,28 +81,29 @@ public abstract class ProjectTemplateTestScenario : ITestScenario, IDisposable
             buildArgs.AddRange(customBuildArgs);
         }
 
-        const string NuGetFeedPasswordVar = "NuGetFeedPassword";
+        const string InternalAccessTokenVar = "InternalAccessToken";
 
-        if (!string.IsNullOrEmpty(Config.NuGetFeedPassword))
+        if (!string.IsNullOrEmpty(Config.InternalAccessToken))
         {
-            buildArgs.Add(NuGetFeedPasswordVar);
-            Environment.SetEnvironmentVariable(NuGetFeedPasswordVar, Config.NuGetFeedPassword);
+            buildArgs.Add(InternalAccessTokenVar);
+            Environment.SetEnvironmentVariable(InternalAccessTokenVar, Config.InternalAccessToken);
         }
 
         try
         {
             DockerHelper.Build(
                 tag: tag,
+                dockerfile: dockerfilePath,
                 target: stageTarget,
-                contextDir: TestSolution.SolutionDir,
+                contextDir: testSolution.SolutionDir,
                 platform: ImageData.Platform,
                 buildArgs: buildArgs.ToArray());
         }
         finally
         {
-            if (!string.IsNullOrEmpty(Config.NuGetFeedPassword))
+            if (!string.IsNullOrEmpty(Config.InternalAccessToken))
             {
-                Environment.SetEnvironmentVariable(NuGetFeedPasswordVar, null);
+                Environment.SetEnvironmentVariable(InternalAccessTokenVar, null);
             }
         }
 
@@ -119,39 +112,48 @@ public abstract class ProjectTemplateTestScenario : ITestScenario, IDisposable
 
     public async Task ExecuteAsync()
     {
+        if (ImageData.Version.Major == 11)
+        {
+            OutputHelper.WriteLine("Skipping project template test scenario for .NET 11 since project templates are"
+                + " not updated yet. Re-enable when https://github.com/dotnet/sdk/issues/50295 is resolved.");
+            return;
+        }
+
         List<string> tags = [];
+        TestSolution? testSolution = null;
 
         try
         {
+            testSolution = new TestSolution(ImageData, SampleName, DockerHelper, InjectCustomTestCode);
+
+            OutputHelper.WriteLine(
+                $"""
+
+                Executing test with generated Dockerfile content:
+                {Dockerfile.Content}
+
+                """);
+
             // Need to include the RID for all build stages because they all rely on "dotnet restore". We should
             // always provide RID when running restore because it's RID-dependent. If we don't then a call to the
             // publish command with a different RID than the default would end up restoring images. This is not
             // what we'd want and plus it would fail in that case if it was targeting a private NuGet feed because
             // the password isn't necessarily provided in that stage.
-            string[] customBuildArgs = [ $"rid={ImageData.Rid}" ];
+            string[] customBuildArgs = [ ..CustomDockerBuildArgs, $"rid={ImageData.Rid}" ];
 
             // Build and run app on SDK image
-            string buildTag = Build(BuildStageTarget, customBuildArgs);
+            string buildTag = Build(testSolution, TestDockerfile.BuildStageName, customBuildArgs);
             tags.Add(buildTag);
-            await RunAsync(buildTag, command: "dotnet run");
+            await RunAsync(buildTag, command: "dotnet run --no-restore");
 
-            // Build and run tests on SDK image
-            // Tests must run as admin user in order to write the test results to the output directory in the
-            // project directory
-            if (!string.IsNullOrEmpty(TestStageTarget))
-            {
-                string unitTestTag = Build(TestStageTarget, customBuildArgs);
-                tags.Add(unitTestTag);
-                await RunAsync(unitTestTag);
-            }
+            // Build and run app stage
+            string tag = Build(testSolution, TestDockerfile.AppStageName, customBuildArgs);
+            tags.Add(tag);
 
-            // Build and run all other projects for each user and target stage
-            foreach (string target in AppStageTargets)
+            // Don't run the app if the build output is not executable
+            if (!OutputIsStatic)
             {
-                string tag = Build(target, customBuildArgs);
-                tags.Add(tag);
                 await RunAsync(tag, AdminUser);
-
                 if (NonRootUserSupported)
                 {
                     await RunAsync(tag, NonRootUser);
@@ -161,27 +163,9 @@ public abstract class ProjectTemplateTestScenario : ITestScenario, IDisposable
         finally
         {
             tags.ForEach(DockerHelper.DeleteImage);
+            testSolution?.Dispose();
         }
     }
 
     protected abstract Task RunAsync(string image, string? user = null, string? command = null);
-
-    protected virtual void Dispose(bool disposing)
-    {
-        if (!_disposed)
-        {
-            if (disposing)
-            {
-                TestSolution.Dispose();
-            }
-
-            _disposed = true;
-        }
-    }
-
-    public void Dispose()
-    {
-        Dispose(disposing: true);
-        GC.SuppressFinalize(this);
-    }
 }

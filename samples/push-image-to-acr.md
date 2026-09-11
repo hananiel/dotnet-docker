@@ -8,11 +8,11 @@ Similar instructions are also available to [push to DockerHub](push-image-to-doc
 
 ## Build the Image
 
-The following instructions are a subset of the [dotnetapp sample](dotnetapp/README.md) instruction, assuming that you are starting from the root of the [dotnet-docker repo](https://github.com/dotnet/dotnet-docker).
+The following instructions are a subset of the [ConsoleApp sample](ConsoleApp/README.md) instruction, assuming that you are starting from the root of the [dotnet-docker repo](https://github.com/dotnet/dotnet-docker).
 
 ```console
 cd samples
-cd dotnetapp
+cd ConsoleApp
 docker build --pull -t dotnetapp .
 ```
 
@@ -26,7 +26,8 @@ docker run --rm dotnetapp
 
 The following example demonstrates how to create a private ACR Registry. Once an image is in ACR, it is easy to deploy it to ACI.
 
-> Note: The instructions use example values that need to be changed to for your environment, specifically the password location, and the user account. More simply, make sure to change "rich" and "richlander" to something else.
+> [!NOTE]
+> The instructions use example values that need to be changed to for your environment, specifically the password location, and the user account. More simply, make sure to change "rich" and "richlander" to something else.
 
 ```console
 az login

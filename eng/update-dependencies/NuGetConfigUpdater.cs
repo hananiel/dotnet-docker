@@ -1,16 +1,11 @@
 ﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
-//
 
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Text;
 using System.Xml.Linq;
 using Microsoft.DotNet.VersionTools.Dependencies;
+using Microsoft.DotNet.Docker.Shared;
 
-#nullable enable
 namespace Dotnet.Docker;
 
 /// <summary>
@@ -19,47 +14,58 @@ namespace Dotnet.Docker;
 internal class NuGetConfigUpdater : IDependencyUpdater
 {
     private const string PkgSrcSuffix = "_internal";
-    private readonly string _repoRoot;
-    private readonly Options _options;
+    private readonly SpecificCommandOptions _options;
     private readonly string _configPath;
 
-    public NuGetConfigUpdater(string repoRoot, Options options)
+    public NuGetConfigUpdater(ManifestVariables manifestVariables, SpecificCommandOptions options)
     {
-        _repoRoot = repoRoot;
         _options = options;
 
-        string configSuffix = (_options.SourceBranch == "nightly" ? ".nightly" : string.Empty);
-        _configPath = Path.Combine(_repoRoot, $"tests/Microsoft.DotNet.Docker.Tests/TestAppArtifacts/NuGet.config{configSuffix}");
+        // The upstream branch represents which GitHub branch the current
+        // branch branched off of. This is either "nightly" or "main".
+        string upstreamBranch = manifestVariables.GetValue("branch");
+
+        string configSuffix = (_options.IsInternal, upstreamBranch) switch
+        {
+            (true, _) => ".internal",
+            (false, "nightly") => ".nightly",
+            _ => string.Empty
+        };
+
+        _configPath = Path.Combine(_options.RepoRoot, $"tests/Microsoft.DotNet.Docker.Tests/TestAppArtifacts/NuGet.config{configSuffix}");
     }
 
     public IEnumerable<DependencyUpdateTask> GetUpdateTasks(IEnumerable<IDependencyInfo> dependencyInfos)
     {
         string existingContent = File.ReadAllText(_configPath);
+
         IDependencyInfo? sdkInfo = dependencyInfos
             .FirstOrDefault(info => info.SimpleName == "sdk");
+
         if (sdkInfo is not null)
         {
             string newContent = GetUpdatedNuGetConfigContent(sdkInfo.SimpleVersion);
 
             if (newContent != existingContent)
             {
-                return new[]
-                {
+                return
+                [
                     new DependencyUpdateTask(
-                        () => File.WriteAllText(_configPath, newContent),
-                        new[] { sdkInfo },
-                        Enumerable.Empty<string>())
-                };
+                        updateAction: () => File.WriteAllText(_configPath, newContent),
+                        usedInfos: [sdkInfo],
+                        readableDescriptionLines: []
+                    )
+                ];
             }
         }
 
-        return Enumerable.Empty<DependencyUpdateTask>();
+        return [];
     }
 
     /// <summary>
     /// Updates the NuGet.config file to include a URL to the internal package feed of the specified version.
     /// </summary>
-    private string GetUpdatedNuGetConfigContent(string sdkVersion)
+    private string GetUpdatedNuGetConfigContent(DotNetVersion sdkVersion)
     {
         string pkgSrcName = $"dotnet{_options.DockerfileVersion.Replace(".", "_")}{PkgSrcSuffix}";
 
@@ -67,7 +73,8 @@ internal class NuGetConfigUpdater : IDependencyUpdater
 
         XElement configuration = doc.Root!;
         UpdatePackageSources(sdkVersion, pkgSrcName, configuration);
-        UpdatePackageSourceCredentials(pkgSrcName, configuration);
+        UpdatePackageSourceCredentials(sdkVersion, pkgSrcName, configuration);
+
         return ToStringWithDeclaration(doc) + Environment.NewLine;
     }
 
@@ -82,7 +89,13 @@ internal class NuGetConfigUpdater : IDependencyUpdater
         return builder.ToString();
     }
 
-    private void UpdatePackageSourceCredentials(string pkgSrcName, XElement configuration)
+    /// <summary>
+    /// Updates the packageSourceCredentials section of the NuGet.config for the current version's package source.
+    /// Credentials are only needed for internal, non-public-preview builds which use authenticated feeds.
+    /// Public preview builds use public feeds, so their credentials are removed if present.
+    /// Only the current version's entry is modified — other versions' credentials are left intact.
+    /// </summary>
+    private void UpdatePackageSourceCredentials(DotNetVersion sdkVersion, string pkgSrcName, XElement configuration)
     {
         XElement? pkgSourceCreds = configuration.Element("packageSourceCredentials");
         if (_options.IsInternal)
@@ -97,28 +110,37 @@ internal class NuGetConfigUpdater : IDependencyUpdater
                 pkgSourceCreds,
                 () => new XElement(pkgSrcName));
             UpdateAddElement(pkgSrcCredsEntry, "Username", "dotnet");
-            UpdateAddElement(pkgSrcCredsEntry, "ClearTextPassword", "%NuGetFeedPassword%");
+            UpdateAddElement(pkgSrcCredsEntry, "ClearTextPassword", "%InternalAccessToken%");
         }
         else
         {
-            pkgSourceCreds?.Remove();
+            // Only remove the credentials entry for the current version's package source,
+            // leaving credentials for other versions intact (e.g. a non-preview version
+            // may still need authenticated access even if this preview version doesn't).
+            pkgSourceCreds?.Element(pkgSrcName)?.Remove();
+            if (pkgSourceCreds is not null && !pkgSourceCreds.HasElements)
+            {
+                pkgSourceCreds.Remove();
+            }
         }
     }
 
-    private void UpdatePackageSources(string sdkVersion, string pkgSrcName, XElement configuration)
-    {      
+    private void UpdatePackageSources(DotNetVersion sdkVersion, string pkgSrcName, XElement configuration)
+    {
         XElement? pkgSources = configuration.Element("packageSources");
         if (_options.IsInternal)
         {
             pkgSources = GetOrCreateXObject(
-                pkgSources,
-                configuration,
-                () => new XElement("packageSources"));
+                node: pkgSources,
+                parent: configuration,
+                createNode: () => new XElement("packageSources")
+            );
 
             UpdateAddElement(
-                pkgSources,
-                pkgSrcName,
-                $"https://pkgs.dev.azure.com/dnceng/internal/_packaging/{sdkVersion}-shipping/nuget/v3/index.json");
+                parentElement: pkgSources,
+                key: pkgSrcName,
+                value: $"https://pkgs.dev.azure.com/dnceng/internal/_packaging/{sdkVersion}-shipping/nuget/v3/index.json"
+            );
         }
         else
         {
@@ -189,4 +211,3 @@ internal class NuGetConfigUpdater : IDependencyUpdater
         public override Encoding Encoding => Encoding.UTF8;
     }
 }
-#nullable disable

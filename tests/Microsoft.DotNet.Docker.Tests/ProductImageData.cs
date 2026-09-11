@@ -11,18 +11,25 @@ namespace Microsoft.DotNet.Docker.Tests
 {
     public record ProductImageData : ImageData
     {
-        private string _sdkOS;
+        private OSInfo _sdkOS;
         private string _osTag;
         private string _osDir;
         private ImageVersion? _versionFamily;
 
-        public bool HasCustomSdk => _sdkOS != null;
+        public bool HasCustomSdk => _sdkOS is not null;
 
-        public bool GlobalizationInvariantMode => (!ImageVariant.HasFlag(DotNetImageVariant.Extra)
-                    || Version.Major == 6)
-                && (IsDistroless || OS.Contains(Tests.OS.Alpine));
+        public bool GlobalizationInvariantMode => !SupportsGlobalization;
 
-        public string SdkOS
+        // PowerShell does not support Arm-based Alpine
+        public bool SupportsPowerShell => !(OS.Family == OSFamily.Alpine && IsArm);
+
+        /// <summary>
+        /// Indicates whether the SDK version of the image supports `dnx` and
+        /// should have it installed.
+        /// </summary>
+        public bool SupportsDnx => VersionFamily != ImageVersion.V8_0 && VersionFamily != ImageVersion.V9_0;
+
+        public OSInfo SdkOS
         {
             get => HasCustomSdk ? _sdkOS : OS;
             init => _sdkOS = value;
@@ -59,19 +66,22 @@ namespace Microsoft.DotNet.Docker.Tests
 
         public string VersionString => Version.ToString();
 
-        public override int DefaultPort => (IsDistroless || Version.Major != 6) ? 8080 : 80;
-
-        public override int? NonRootUID =>
-            OS == Tests.OS.Mariner20Distroless && Version.Major == 6 ? 101 : base.NonRootUID;
+        private bool SupportsGlobalization
+        {
+            get
+            {
+                bool isSizeFocusedImage = IsDistroless || OS.Family == OSFamily.Alpine;
+                return ImageVariant.HasFlag(DotNetImageVariant.Extra) || !isSizeFocusedImage;
+            }
+        }
 
         public string GetDockerfilePath(DotNetImageRepo imageRepo)
         {
             IEnumerable<string> pathComponents =
             [
-                "src",
-                GetImageRepoName(imageRepo) + GetVariantSuffix(),
+                GetRepoSrcPath(imageRepo),
                 Version.ToString(),
-                OSDir,
+                OSDir + GetVariantSuffix(),
                 GetArchLabel()
             ];
 
@@ -84,8 +94,17 @@ namespace Microsoft.DotNet.Docker.Tests
 
         public override string GetIdentifier(string type) => $"{VersionString}-{base.GetIdentifier(type)}";
 
-        public static string GetImageRepoName(DotNetImageRepo imageRepo) =>
-            Enum.GetName(typeof(DotNetImageRepo), imageRepo).ToLowerInvariant().Replace('_', '-');
+        public static string GetRepoName(DotNetImageRepo imageRepo) => imageRepo switch
+        {
+            DotNetImageRepo.Monitor_Base => "monitor/base",
+            _ => Enum.GetName(imageRepo).ToLowerInvariant().Replace('_', '-')
+        };
+
+        private static string GetRepoSrcPath(DotNetImageRepo imageRepo) => "src/" + imageRepo switch
+        {
+            DotNetImageRepo.Monitor_Base => "monitor-base",
+            _ => GetRepoName(imageRepo)
+        };
 
         public static string GetImageVariantName(DotNetImageVariant imageVariant)
         {
@@ -115,7 +134,7 @@ namespace Microsoft.DotNet.Docker.Tests
             }
 
             string tag = GetTagName(imageRepo);
-            string imageName = GetImageName(tag, GetImageRepoName(imageRepo));
+            string imageName = GetImageName(tag, GetRepoName(imageRepo));
 
             if (!skipPull)
             {
@@ -159,10 +178,12 @@ namespace Microsoft.DotNet.Docker.Tests
         {
             // For distroless, dotnet will be the default entrypoint so we don't need to specify "dotnet" in the command.
             // See https://github.com/dotnet/dotnet-docker/issues/3866
-            string executable = !IsDistroless || (OS.Contains(Tests.OS.Mariner) && Version.Major == 6)
-                ? "dotnet "
-                : string.Empty;
-            return executable + command;
+            if (IsDistroless)
+            {
+                return command;
+            }
+
+            return $"dotnet {command}";
         }
 
         private string GetTagName(DotNetImageRepo imageRepo)
@@ -175,21 +196,15 @@ namespace Microsoft.DotNet.Docker.Tests
 
             switch (imageRepo)
             {
-                case DotNetImageRepo.Runtime:
-                case DotNetImageRepo.Aspnet:
-                case DotNetImageRepo.Runtime_Deps:
-                case DotNetImageRepo.Monitor:
-                case DotNetImageRepo.Aspire_Dashboard:
-                    imageVersion = Version;
-                    os = OSTag;
-                    break;
                 case DotNetImageRepo.SDK:
                     imageVersion = Version;
                     os = SdkOS;
                     variant = GetImageVariantName(SdkImageVariant);
                     break;
                 default:
-                    throw new NotSupportedException($"Unsupported image type '{imageRepo}'");
+                    imageVersion = Version;
+                    os = OSTag;
+                    break;
             }
 
             return GetTagName(imageVersion.GetTagName(), os, variant);

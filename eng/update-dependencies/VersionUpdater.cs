@@ -8,7 +8,6 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text.RegularExpressions;
 
-#nullable enable
 namespace Dotnet.Docker
 {
     /// <summary>
@@ -21,10 +20,10 @@ namespace Dotnet.Docker
         private static readonly string s_versionGroupName = "versionValue";
 
         private readonly string _productName;
-        private readonly Options _options;
+        private readonly SpecificCommandOptions _options;
         private readonly VersionType _versionType;
 
-        public VersionUpdater(VersionType versionType, string productName, string dockerfileVersion, string repoRoot, Options options)
+        public VersionUpdater(VersionType versionType, string productName, string dockerfileVersion, SpecificCommandOptions options)
         {
             _productName = productName;
             _options = options;
@@ -33,7 +32,7 @@ namespace Dotnet.Docker
 
             Trace.TraceInformation($"Updating {versionVariableName}");
 
-            Path = System.IO.Path.Combine(repoRoot, UpdateDependencies.VersionsFilename);
+            Path = options.GetManifestVersionsFilePath();
             VersionGroupName = s_versionGroupName;
             Regex = GetVersionVariableRegex(versionVariableName);
         }
@@ -96,13 +95,12 @@ namespace Dotnet.Docker
                 }
             }
 
-            return UpdateDependencies.ResolveProductVersion(version, _options);
+            return VersionHelper.ResolveProductVersion(version, _options.StableBranding);
         }
 
         private static Regex GetVersionVariableRegex(string versionVariableName) =>
             ManifestHelper.GetManifestVariableRegex(
                 versionVariableName,
-                $"(?<{s_versionGroupName}>[\\d]+.[\\d]+.[\\d]+(-[\\w]+(.[\\d]+)*)?)");
+                $"(?<{s_versionGroupName}>v?[\\d]+.[\\d]+.[\\d]+(-[\\w]+(.[\\d]+)*)?)");
     }
 }
-#nullable disable

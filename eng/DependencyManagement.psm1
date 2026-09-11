@@ -25,3 +25,15 @@ function Resolve-DotnetProductUrl([string] $akaMsUrl) {
     Write-Host "Resolved URL: $resolvedUrl"
     return $resolvedUrl
 }
+
+function Get-ProductReleaseState() {
+    if ($(Get-Branch) -ieq 'main') {
+        return 'Release'
+    } else {
+        return 'Prerelease'
+    }
+}
+
+function Get-DockerOs() {
+    return docker version -f "{{ .Server.Os }}"
+}

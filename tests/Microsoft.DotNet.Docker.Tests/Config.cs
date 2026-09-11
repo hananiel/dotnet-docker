@@ -13,35 +13,42 @@ namespace Microsoft.DotNet.Docker.Tests
     {
         private const string VariableGroupName = "variable";
         private const string VariablePattern = $"\\$\\((?<{VariableGroupName}>[\\w:\\-.|]+)\\)";
-        private static Lazy<JObject> Manifest { get; } = new Lazy<JObject>(() => LoadManifest("manifest.json"));
-        private static Lazy<JObject> ManifestVersions { get; } = new Lazy<JObject>(() => LoadManifest("manifest.versions.json"));
+        private static Lazy<JObject> ManifestVersions { get; } =
+            new Lazy<JObject>(() => LoadManifest("manifest.versions.json"));
 
-        public static string SourceRepoRoot { get; } = Environment.GetEnvironmentVariable("SOURCE_REPO_ROOT") ?? string.Empty;
+        public static Lazy<JObject> Manifest { get; } = new Lazy<JObject>(() => LoadManifest("manifest.json"));
+        public static string SourceRepoRoot { get; } =
+            GetEnvironmentVariableOrDefault("SOURCE_REPO_ROOT", string.Empty);
         public static bool IsHttpVerificationDisabled { get; } =
             Environment.GetEnvironmentVariable("DISABLE_HTTP_VERIFICATION") != null;
-        public static bool PullImages { get; } = Environment.GetEnvironmentVariable("PULL_IMAGES") != null;
+        public static bool PullImages { get; } =
+            !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PULL_IMAGES"));
         public static bool IsNightlyRepo { get; } = GetIsNightlyRepo();
         public static bool IsRunningInContainer { get; } =
-            Environment.GetEnvironmentVariable("RUNNING_TESTS_IN_CONTAINER") != null;
-        public static string RepoPrefix { get; } = Environment.GetEnvironmentVariable("REPO_PREFIX") ?? string.Empty;
+            !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("RUNNING_TESTS_IN_CONTAINER"));
+        public static string RepoPrefix { get; } = GetEnvironmentVariableOrDefault("REPO_PREFIX", string.Empty);
         public static string Registry { get; } =
-            Environment.GetEnvironmentVariable("REGISTRY") ?? (string)Manifest.Value["registry"];
+            GetEnvironmentVariableOrDefault("REGISTRY", (string)Manifest.Value["registry"]);
+        public static string CacheRegistry { get; } =
+            GetEnvironmentVariableOrDefault("CACHE_REGISTRY", string.Empty);
         public static string[] OsNames { get; } =
-            (Environment.GetEnvironmentVariable("IMAGE_OS_NAMES") ?? string.Empty).Split(",", StringSplitOptions.RemoveEmptyEntries);
+            GetEnvironmentVariableOrDefault("IMAGE_OS_NAMES", string.Empty)
+                .Split(",", StringSplitOptions.RemoveEmptyEntries);
         public static string SourceBranch { get; } =
-            Environment.GetEnvironmentVariable("SOURCE_BRANCH") ?? string.Empty;
-        public static string SasQueryString { get; } =
-            Environment.GetEnvironmentVariable("SAS_QUERY_STRING") ?? string.Empty;
-        public static string NuGetFeedPassword { get; } =
-            Environment.GetEnvironmentVariable("NUGET_FEED_PASSWORD") ?? string.Empty;
+            GetEnvironmentVariableOrDefault("SOURCE_BRANCH", string.Empty);
+        public static string InternalAccessToken { get; } =
+            GetEnvironmentVariableOrDefault("INTERNAL_ACCESS_TOKEN", string.Empty);
         public static string[] Paths { get; } =
             Environment.GetEnvironmentVariable("DOCKERFILE_PATHS")?
-                .Split(',', StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>();
+                .Split(',', StringSplitOptions.RemoveEmptyEntries) ?? [];
 
-        public static bool IsInternal(string dotnetVersion)
+        public static bool IsInternal { get; } =
+            !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("INTERNAL_TESTING"));
+
+        private static string GetEnvironmentVariableOrDefault(string variableName, string defaultValue)
         {
-            string versionBaseUrl = GetBaseUrl(dotnetVersion);
-            return versionBaseUrl.Contains("msrc") || versionBaseUrl.Contains("internal");
+            string value = Environment.GetEnvironmentVariable(variableName);
+            return !string.IsNullOrEmpty(value) ? value : defaultValue;
         }
 
         private static bool GetIsNightlyRepo()
@@ -60,6 +67,20 @@ namespace Microsoft.DotNet.Docker.Tests
         public static string GetVariableValue(string variableName) =>
             GetVariableValue(variableName, (JObject)ManifestVersions.Value["variables"]);
 
+        public static bool TryGetVariableValue(string variableName, out string value)
+        {
+            var variables = (JObject)ManifestVersions.Value["variables"];
+            JToken token = variables[variableName];
+            if (token is null)
+            {
+                value = string.Empty;
+                return false;
+            }
+
+            value = ResolveVariables((string)token, variables);
+            return true;
+        }
+
         private static string GetVariableValue(string variableName, JObject variables) =>
             ResolveVariables((string)variables[variableName], variables);
 
@@ -77,7 +98,7 @@ namespace Microsoft.DotNet.Docker.Tests
         }
 
         public static string GetBaseUrl(string dotnetVersion) =>
-            GetVariableValue($"base-url|{dotnetVersion}|{Config.SourceBranch}", (JObject)ManifestVersions.Value["variables"]);
+            GetVariableValue($"dotnet|{dotnetVersion}|base-url|{Config.SourceBranch}", (JObject)ManifestVersions.Value["variables"]);
 
         public static string GetBuildVersion(DotNetImageRepo imageRepo, string dotnetVersion)
         {

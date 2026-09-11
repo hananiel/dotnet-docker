@@ -18,6 +18,8 @@ param(
 
     [string]$Registry,
 
+    [string]$CacheRegistry,
+
     [string]$RepoPrefix,
 
     [switch]$DisableHttpVerification,
@@ -26,12 +28,12 @@ param(
 
     [string]$ImageInfoPath,
 
-    [ValidateSet("runtime", "runtime-deps", "aspnet", "sdk", "pre-build", "sample", "image-size", "monitor", "aspire-dashboard")]
-    [string[]]$TestCategories = @("runtime", "runtime-deps", "aspnet", "sdk", "monitor", "aspire-dashboard"),
+    [ValidateSet("runtime", "runtime-deps", "aspnet", "sdk", "pre-build", "sample", "monitor", "aspire-dashboard", "yarp")]
+    [string[]]$TestCategories = @("runtime", "runtime-deps", "aspnet", "sdk", "monitor", "aspire-dashboard", "yarp"),
 
-    [securestring]$SasQueryString,
+    [string]$CustomTestFilter,
 
-    [securestring]$NuGetFeedPassword
+    [string]$InternalAccessToken
 )
 
 Import-Module -force $PSScriptRoot/../eng/DependencyManagement.psm1
@@ -61,13 +63,13 @@ function GetPath {
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$EngCommonDir = "$PSScriptRoot/../eng/common"
+$DockerToolsDir = "$PSScriptRoot/../eng/docker-tools"
 
 $DotnetInstallDir = "$PSScriptRoot/../.dotnet"
-& $EngCommonDir/Install-DotNetSdk.ps1 -InstallPath $DotnetInstallDir
+& $DockerToolsDir/Install-DotNetSdk.ps1 -InstallPath $DotnetInstallDir
 
 # Ensure that ImageBuilder image is pulled because some tests require it
-& $EngCommonDir/Get-ImageBuilder.ps1
+& $DockerToolsDir/Get-ImageBuilder.ps1
 
 $activeOS = docker version -f "{{ .Server.Os }}"
 
@@ -111,6 +113,7 @@ Try {
     $env:IMAGE_ARCH = $Architecture
     $env:IMAGE_OS_NAMES = $($OSVersions -Join ",")
     $env:REGISTRY = $Registry
+    $env:CACHE_REGISTRY = $CacheRegistry
     $env:REPO_PREFIX = $RepoPrefix
     $env:IMAGE_INFO_PATH = $ImageInfoPath
     $env:SOURCE_REPO_ROOT = (Get-Item "$PSScriptRoot").Parent.FullName
@@ -120,45 +123,38 @@ Try {
     $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = 1
     $env:DOTNET_MULTILEVEL_LOOKUP = '0'
 
-    if ($SasQueryString) {
-        $env:SAS_QUERY_STRING = ConvertFrom-SecureString $SasQueryString -AsPlainText
-    }
-
-    if ($NuGetFeedPassword) {
-        $env:NUGET_FEED_PASSWORD = ConvertFrom-SecureString $NuGetFeedPassword -AsPlainText
+    if ($InternalAccessToken) {
+        $env:INTERNAL_ACCESS_TOKEN = $InternalAccessToken
+        $env:INTERNAL_TESTING = 1
     }
 
     $testFilter = ""
     if ($TestCategories) {
         # Construct an expression that filters the test to each of the
         # selected TestCategories (using an OR operator between each category).
-        # See https://docs.microsoft.com/en-us/dotnet/core/testing/selective-unit-tests
+        # See https://docs.microsoft.com/dotnet/core/testing/selective-unit-tests
         $TestCategories | ForEach-Object {
-            # Skip pre-build tests on Windows because of missing pre-reqs (https://github.com/dotnet/dotnet-docker/issues/2261)
-            if ($_ -eq "pre-build" -and $activeOS -eq "windows") {
-                Write-Warning "Skipping pre-build tests for Windows containers"
+            if ($testFilter) {
+                $testFilter += "|"
             }
-            else {
-                if ($testFilter) {
-                    $testFilter += "|"
-                }
 
-                $testFilter += "Category=$_"
-            }
+            $testFilter += "Category=$_"
         }
 
         if (-not $testFilter) {
             exit;
         }
 
-        $testFilter = "--filter `"$testFilter`""
+        if ($CustomTestFilter)
+        {
+            $testFilter = "$CustomTestFilter&($testFilter)"
+        }
+
+        $testFilter = "--filter '$testFilter'"
     }
 
+    Write-Host "`nRunning tests with $testFilter`n"
     Exec "$DotnetInstallDir/dotnet test $testFilter --logger:trx"
-
-    if ($TestCategories.Contains('image-size')) {
-        & ../performance/Validate-ImageSize.ps1 -PullImages:$PullImages -ValidationMode Integrity
-    }
 }
 Finally {
     Pop-Location

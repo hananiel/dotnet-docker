@@ -4,11 +4,13 @@ using System;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading.Tasks;
+using Polly;
+using Polly.Retry;
 using Xunit.Abstractions;
 
 namespace Microsoft.DotNet.Docker.Tests;
 
-public class WebScenario(ProductImageData imageData, DockerHelper dockerHelper, ITestOutputHelper outputHelper)
+public abstract class WebScenario(ProductImageData imageData, DockerHelper dockerHelper, ITestOutputHelper outputHelper)
     : ConsoleAppScenario(imageData, dockerHelper, outputHelper)
 {
     protected virtual int? PortOverride { get; } = null;
@@ -16,12 +18,6 @@ public class WebScenario(ProductImageData imageData, DockerHelper dockerHelper, 
     protected virtual string? Endpoint { get; } = null;
 
     protected override string SampleName { get; } = "web";
-
-    protected override string BuildStageTarget { get; } = "build";
-
-    // Running a scenario of unit testing within the sdk container is identical between a console app and web app,
-    // so we only want to execute it for one of those app types.
-    protected override string? TestStageTarget { get; } = null;
 
     protected override DotNetImageRepo RuntimeImageRepo { get; } = DotNetImageRepo.Aspnet;
 
@@ -33,7 +29,7 @@ public class WebScenario(ProductImageData imageData, DockerHelper dockerHelper, 
 
         int port = PortOverride ?? ImageData.DefaultPort;
 
-        if (PortOverride != null || ImageData.Version.Major == 6)
+        if (PortOverride != null)
         {
             command += $" --urls http://*:{port}";
         }
@@ -47,7 +43,8 @@ public class WebScenario(ProductImageData imageData, DockerHelper dockerHelper, 
                 optionalRunArgs: $"-p {port}",
                 runAsUser: user,
                 command: command,
-                skipAutoCleanup: true);
+                skipAutoCleanup: true,
+                tty: false);
 
             await VerifyHttpResponseFromContainerAsync(
                 containerName,
@@ -58,7 +55,7 @@ public class WebScenario(ProductImageData imageData, DockerHelper dockerHelper, 
         }
         finally
         {
-            DockerHelper.DeleteContainer(containerName);
+            DockerHelper.DeleteContainer(containerName, captureLogs: true);
         }
     }
 
@@ -68,60 +65,65 @@ public class WebScenario(ProductImageData imageData, DockerHelper dockerHelper, 
         ITestOutputHelper outputHelper,
         int containerPort,
         string? pathAndQuery = null,
-        Action<HttpResponseMessage>? validateCallback = null,
         AuthenticationHeaderValue? authorizationHeader = null)
     {
-        int retries = 4;
+        const int RetryAttempts = 4;
+        const int RetryDelaySeconds = 3;
+
+        if (!string.IsNullOrEmpty(pathAndQuery) && !pathAndQuery.StartsWith('/'))
+        {
+            pathAndQuery = "/" + pathAndQuery;
+        }
 
         // Can't use localhost when running inside containers or Windows.
         string url = !Config.IsRunningInContainer && DockerHelper.IsLinuxContainerModeEnabled
-            ? $"http://localhost:{dockerHelper.GetContainerHostPort(containerName, containerPort)}/{pathAndQuery}"
-            : $"http://{dockerHelper.GetContainerAddress(containerName)}:{containerPort}/{pathAndQuery}";
+            ? $"http://localhost:{dockerHelper.GetContainerHostPort(containerName, containerPort)}{pathAndQuery}"
+            : $"http://{dockerHelper.GetContainerAddress(containerName)}:{containerPort}{pathAndQuery}";
 
-        using (HttpClient client = new HttpClient())
+        ResiliencePipeline pipeline = new ResiliencePipelineBuilder()
+            .AddRetry(new RetryStrategyOptions()
+                {
+                    BackoffType = DelayBackoffType.Exponential,
+                    MaxRetryAttempts = RetryAttempts,
+                    Delay = TimeSpan.FromSeconds(RetryDelaySeconds),
+
+                    // If the container is still starting up, it will refuse connections until it's ready.
+                    // If it crashed, stop retrying immediately.
+                    ShouldHandle = new PredicateBuilder()
+                        .Handle<HttpRequestException>(exception =>
+                            DockerHelper.ContainerIsRunning(containerName)),
+                })
+            .Build();
+
+        using HttpClient client = new();
+        if (authorizationHeader is not null)
         {
-            if (null != authorizationHeader)
-            {
-                client.DefaultRequestHeaders.Authorization = authorizationHeader;
-            }
-
-            while (retries > 0)
-            {
-                retries--;
-                await Task.Delay(TimeSpan.FromSeconds(2));
-
-                HttpResponseMessage? result = null;
-                try
-                {
-                    result = await client.GetAsync(url);
-                    outputHelper.WriteLine($"HTTP {result.StatusCode}\n{await result.Content.ReadAsStringAsync()}");
-
-                    if (null == validateCallback)
-                    {
-                        result.EnsureSuccessStatusCode();
-                    }
-                    else
-                    {
-                        validateCallback(result);
-                    }
-
-                    // Store response in local that will not be disposed
-                    HttpResponseMessage returnResult = result;
-                    result = null;
-                    return returnResult;
-                }
-                catch (Exception ex)
-                {
-                    outputHelper.WriteLine($"Request to {url} failed - retrying: {ex}");
-                }
-                finally
-                {
-                    result?.Dispose();
-                }
-            }
+            client.DefaultRequestHeaders.Authorization = authorizationHeader;
         }
 
-        throw new TimeoutException($"Timed out attempting to access the endpoint {url} on container {containerName}");
+        HttpResponseMessage? result = null;
+        try
+        {
+            result = await pipeline.ExecuteAsync(async cancellationToken =>
+                {
+                    outputHelper.WriteLine($"Sending request: GET {url}");
+                    return await client.GetAsync(url, cancellationToken);
+                });
+
+            outputHelper.WriteLine($"""
+                Response: HTTP {result.StatusCode}
+                Content: {await result.Content.ReadAsStringAsync()}
+                """);
+
+            // Store response in local that will not be disposed
+            HttpResponseMessage returnResult = result;
+            result = null;
+            return returnResult;
+        }
+        finally
+        {
+            result?.Dispose();
+        }
     }
 
     public static async Task VerifyHttpResponseFromContainerAsync(
@@ -137,7 +139,33 @@ public class WebScenario(ProductImageData imageData, DockerHelper dockerHelper, 
             dockerHelper,
             outputHelper,
             containerPort,
-            pathAndQuery,
-            validateCallback)).Dispose();
+            pathAndQuery)).Dispose();
+    }
+
+    public new class FxDependent(ProductImageData imageData, DockerHelper dockerHelper, ITestOutputHelper outputHelper)
+        : WebScenario(imageData, dockerHelper, outputHelper)
+    {
+        protected override TestDockerfile Dockerfile =>
+            TestDockerfileBuilder.GetDefaultDockerfile(PublishConfig.FxDependent);
+    }
+
+    public new class SelfContained(ProductImageData imageData, DockerHelper dockerHelper, ITestOutputHelper outputHelper)
+        : WebScenario(imageData, dockerHelper, outputHelper)
+    {
+        protected override DotNetImageRepo RuntimeImageRepo { get; } = DotNetImageRepo.Runtime_Deps;
+
+        protected override TestDockerfile Dockerfile =>
+            TestDockerfileBuilder.GetDefaultDockerfile(PublishConfig.SelfContained);
+    }
+
+    public class Aot(ProductImageData imageData, DockerHelper dockerHelper, ITestOutputHelper outputHelper)
+        : WebScenario(imageData, dockerHelper, outputHelper)
+    {
+        protected override string? Endpoint { get; } = "todos";
+        protected override string SampleName { get; } = "webapiaot";
+        protected override DotNetImageRepo RuntimeImageRepo { get; } = DotNetImageRepo.Runtime_Deps;
+
+        protected override TestDockerfile Dockerfile =>
+            TestDockerfileBuilder.GetDefaultDockerfile(PublishConfig.Aot);
     }
 }

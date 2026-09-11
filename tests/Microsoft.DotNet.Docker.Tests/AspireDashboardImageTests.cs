@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -21,6 +22,8 @@ public class AspireDashboardImageTests(ITestOutputHelper outputHelper) : CommonR
 
     private const int DashboardOtlpHttpPort = 18890;
 
+    private const int DashboardMcpPort = 18891;
+
     protected override DotNetImageRepo ImageRepo => DotNetImageRepo.Aspire_Dashboard;
 
     public static IEnumerable<object[]> GetImageData() =>
@@ -39,16 +42,16 @@ public class AspireDashboardImageTests(ITestOutputHelper outputHelper) : CommonR
     [MemberData(nameof(GetImageData))]
     public void VerifyEnvironmentVariables(ProductImageData imageData)
     {
+        string baseUrl = "http://+";
+
         IEnumerable<EnvironmentVariableInfo> expectedVariables =
         [
             // Unset ASPNETCORE_HTTP_PORTS from base image
-            new EnvironmentVariableInfo("ASPNETCORE_HTTP_PORTS", string.Empty),
-            // These two URL environment variables should be in the more compact format, i.e. "http://+:18888", but need
-            // to have a base URL of 0.0.0.0 due to a bug in the Aspire Dashboard.
-            // Change the format when https://github.com/dotnet/dotnet-docker/issues/5190 is closed.
-            new EnvironmentVariableInfo("ASPNETCORE_URLS", $"http://0.0.0.0:{DashboardWebPort}"),
-            new EnvironmentVariableInfo("DOTNET_DASHBOARD_OTLP_ENDPOINT_URL", $"http://0.0.0.0:{DashboardOtlpPort}"),
-            new EnvironmentVariableInfo("DOTNET_DASHBOARD_OTLP_HTTP_ENDPOINT_URL", $"http://0.0.0.0:{DashboardOtlpHttpPort}"),
+            EnvironmentVariableInfo.Require("ASPNETCORE_HTTP_PORTS", string.Empty),
+            EnvironmentVariableInfo.Require("ASPNETCORE_URLS", $"{baseUrl}:{DashboardWebPort}"),
+            EnvironmentVariableInfo.Require("DOTNET_DASHBOARD_OTLP_ENDPOINT_URL", $"{baseUrl}:{DashboardOtlpPort}"),
+            EnvironmentVariableInfo.Require("DOTNET_DASHBOARD_OTLP_HTTP_ENDPOINT_URL", $"{baseUrl}:{DashboardOtlpHttpPort}"),
+            EnvironmentVariableInfo.Require("DOTNET_DASHBOARD_MCP_ENDPOINT_URL", $"{baseUrl}:{DashboardMcpPort}"),
         ];
 
         string imageTag = imageData.GetImage(ImageRepo, DockerHelper);
@@ -59,12 +62,28 @@ public class AspireDashboardImageTests(ITestOutputHelper outputHelper) : CommonR
     [MemberData(nameof(GetImageData))]
     public void VerifyInstalledPackages(ProductImageData imageData)
     {
+        ProductImageData expectedPackagesImageData = imageData;
+
+        // Special case for Aspire Dashboard 9.0 images:
+        // Aspire Dashboard 9.0 is based on .NET 8 since Azure Linux 3.0 does not yet have FedRAMP certification.
+        // Remove workaround once https://github.com/dotnet/dotnet-docker/issues/5375 is fixed.
+        if (imageData.VersionFamily == ImageVersion.V9_0)
+        {
+            expectedPackagesImageData = imageData with
+            {
+                Version = ImageVersion.V8_0
+            };
+        }
+
         // Aspire Dashboard image is based on an "extra" image, but doesn't have the "extra" qualifier itself, so we
         // need to make sure we compare the correct lists of packages.
-        IEnumerable<string> expectedPackages = GetExpectedPackages(imageData with { ImageVariant = DotNetImageVariant.Extra }, ImageRepo);
-        IEnumerable<string> actualPackages = GetInstalledPackages(imageData, ImageRepo, DockerHelper, [ AppPath ]);
+        IEnumerable<string> expectedPackages =
+            GetExpectedPackages(expectedPackagesImageData with { ImageVariant = DotNetImageVariant.Extra }, ImageRepo);
+        IEnumerable<string> actualPackages =
+            GetInstalledPackages(imageData, ImageRepo, [ AppPath ]);
 
-        ComparePackages(expectedPackages, actualPackages, imageData.IsDistroless, OutputHelper);
+        string imageName = imageData.GetImage(ImageRepo, DockerHelper, skipPull: true);
+        ComparePackages(expectedPackages, actualPackages, imageData.IsDistroless, imageName, OutputHelper);
     }
 
     [LinuxImageTheory]

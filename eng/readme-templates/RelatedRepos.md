@@ -3,11 +3,13 @@
       top-header: The string to use as the top-level header.
       readme-host: Moniker of the site that will host the readmes
       product-repos: List of .NET product repos
+      nightly-only-repos: List of nightly-only .NET product repos
       product-family-repos: List of .NET product family repos
       samples-repos: List of .NET samples repos
       framework-repos: List of .NET Framework repos ^
 
     set repos to ARGS["product-repos"] ^
+    set nightlyOnlyRepos to ARGS["nightly-only-repos"] ^
     set productFamilyRepos to ARGS["product-family-repos"] ^
     set samplesRepos to ARGS["samples-repos"] ^
     set frameworkRepos to ARGS["framework-repos"] ^
@@ -52,22 +54,19 @@
     _ Exclude monitor/base from repos besides monitor ^
     set repos to filter(repos, filterMonitorRepo) ^
 
+    _ Exclude this repo from its own readme ^
+    set repos to filter(repos, isNotCurrentRepo) ^
+    set nightlyOnlyRepos to filter(nightlyOnlyRepos, isNotCurrentRepo) ^
+    set samplesRepos to filter(samplesRepos, isNotCurrentRepo) ^
+
     set repos to
         when(isNightlyRepo,
             when(IS_PRODUCT_FAMILY,
                 cat(productFamilyRepos, repos, samplesRepos),
-                cat(productFamilyRepos, map(repos, insertNightly), samplesRepos)),
+                cat(productFamilyRepos, currentRepo, map(cat(repos, nightlyOnlyRepos), insertNightly), samplesRepos)),
             when(IS_PRODUCT_FAMILY,
                 cat(map(repos, insertNightly)),
-                cat(productFamilyRepos, repos, samplesRepos))) ^
-
-    _ Exclude this repo from its own readme ^
-    set repos to filter(repos, isNotCurrentRepo) ^
-
-    _ For non-nightly product repos, show the nightly version ^
-    set repos to when(!isNightlyRepo && !IS_PRODUCT_FAMILY,
-        cat(repos, map(currentRepo, insertNightly)),
-        repos)
+                cat(productFamilyRepos, repos, map(currentRepo, insertNightly), samplesRepos)))
 
 }}{{ARGS["top-header"]}} Related Repositories
 

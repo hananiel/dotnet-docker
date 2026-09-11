@@ -20,8 +20,8 @@ namespace Microsoft.DotNet.Docker.Tests
 
         public Arch Arch { get; set; }
         public bool IsArm => Arch == Arch.Arm || Arch == Arch.Arm64;
-        public string OS { get; set; }
-        public bool IsDistroless => OS.Contains("distroless") || OS.Contains("chiseled");
+        public OSInfo OS { get; set; }
+        public bool IsDistroless => OS.IsDistroless;
         public virtual int DefaultPort => 8080;
         public virtual int? NonRootUID => IsWindows ? null : 1654;
 
@@ -66,7 +66,7 @@ namespace Microsoft.DotNet.Docker.Tests
                 _ => throw new NotImplementedException()
             };
 
-        public bool IsWindows => OS.StartsWith(Tests.OS.NanoServer) || OS.StartsWith(Tests.OS.ServerCore);
+        public bool IsWindows => OS.IsWindows;
 
         public string Rid
         {
@@ -87,7 +87,7 @@ namespace Microsoft.DotNet.Docker.Tests
                         Arch.Amd64 => "x64",
                         _ => throw new NotImplementedException()
                     };
-                    string modifier = OS.StartsWith(Tests.OS.Alpine) ? "musl-" : "";
+                    string modifier = OS.Family == OSFamily.Alpine ? "musl-" : "";
                     rid = $"linux-{modifier}{arch}";
                 }
 
@@ -136,11 +136,14 @@ namespace Microsoft.DotNet.Docker.Tests
 
         public static string GetImageName(string tag, string repoName, string repoNameModifier = null)
         {
-            string repo = $"dotnet{repoNameModifier ?? GetRepoNameModifier()}/{repoName}";
+            string repo = GetRepoName(repoName, repoNameModifier);
             string registry = GetRegistryName(repo, tag);
 
             return $"{registry}{repo}:{tag}";
         }
+
+        public static string GetRepoName(string repoName, string repoNameModifier = null) =>
+            $"dotnet{repoNameModifier ?? GetRepoNameModifier()}/{repoName}";
 
         protected string GetTagName(string tagPrefix, string os, string tagPostfix = null)
         {
@@ -149,7 +152,7 @@ namespace Microsoft.DotNet.Docker.Tests
             return string.Join('-', tagParts);
         }
 
-        protected virtual string GetArchTagSuffix() => (Arch == Arch.Amd64 && !DockerHelper.IsLinuxContainerModeEnabled)
+        protected virtual string GetArchTagSuffix() => (Arch == Arch.Amd64 && IsWindows)
             ? string.Empty
             : GetArchLabel();
 
@@ -159,7 +162,7 @@ namespace Microsoft.DotNet.Docker.Tests
                 Arch.Amd64 => "amd64",
                 Arch.Arm => "arm32v7",
                 Arch.Arm64 => "arm64v8",
-                _ => throw new NotSupportedException()
+                _ => throw new NotSupportedException($"Unsupported architecture '{Arch}'")
             };
 
         private static string GetRegistryName(string repo, string tag)

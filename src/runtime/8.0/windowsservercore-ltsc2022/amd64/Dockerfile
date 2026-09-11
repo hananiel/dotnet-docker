@@ -1,5 +1,42 @@
 # escape=`
 
+# Installer image
+FROM mcr.microsoft.com/windows/servercore:ltsc2022-amd64 AS installer
+
+# Retrieve .NET Runtime
+RUN powershell -Command `
+        $ErrorActionPreference = 'Stop'; `
+        $ProgressPreference = 'SilentlyContinue'; `
+        `
+        $dotnet_version = '8.0.31'; `
+        $dotnet_file = 'dotnet-runtime-' + $dotnet_version + '-win-x64.zip'; `
+        $dotnet_checksums_file = $dotnet_version + '-sha.txt'; `
+        `
+        Invoke-WebRequest -OutFile $dotnet_file https://builds.dotnet.microsoft.com/dotnet/Runtime/$dotnet_version/$dotnet_file; `
+        Invoke-WebRequest -OutFile $dotnet_checksums_file https://builds.dotnet.microsoft.com/dotnet/checksums/$dotnet_checksums_file; `
+        `
+        $dotnet_sha512 = ( `
+            (Get-Content $dotnet_checksums_file ^| Where-Object { `
+                    $_ -match ([regex]::Escape($dotnet_file))` + '$'; `
+            }) -split '\s+' `
+        )[0].ToUpper(); `
+        $actual_hash = (Get-FileHash $dotnet_file -Algorithm SHA512).Hash.ToUpper(); `
+        `
+        if ($dotnet_sha512 -ne $actual_hash) { `
+            Write-Host 'CHECKSUM VERIFICATION FAILED!'; `
+            Write-Host 'Expected: ' + $dotnet_sha512; `
+            Write-Host 'Actual:   ' + $actual_hash; `
+            exit 1; `
+        }; `
+        `
+        mkdir dotnet; `
+        tar --gzip --extract --no-same-owner --file $dotnet_file --directory dotnet; `
+        Remove-Item -Force `
+            $dotnet_file, `
+            $dotnet_checksums_file
+
+
+# Runtime image
 FROM mcr.microsoft.com/windows/servercore:ltsc2022-amd64
 
 ENV `
@@ -8,22 +45,8 @@ ENV `
     # Enable detection of running in a container
     DOTNET_RUNNING_IN_CONTAINER=true `
     # .NET Runtime version
-    DOTNET_VERSION=8.0.7
-
-# Install .NET Runtime
-RUN powershell -Command `
-        $ErrorActionPreference = 'Stop'; `
-        $ProgressPreference = 'SilentlyContinue'; `
-        `
-        Invoke-WebRequest -OutFile dotnet.zip https://dotnetcli.azureedge.net/dotnet/Runtime/$Env:DOTNET_VERSION/dotnet-runtime-$Env:DOTNET_VERSION-win-x64.zip; `
-        $dotnet_sha512 = 'abe510a4e57bb115698bbfc1c49fe2414cd5696ebeffc7c8803d4d0278a40010dff36b3c347651e5a87301a4472bc610019ea281499d5c351e25e60caa18195e'; `
-        if ((Get-FileHash dotnet.zip -Algorithm sha512).Hash -ne $dotnet_sha512) { `
-            Write-Host 'CHECKSUM VERIFICATION FAILED!'; `
-            exit 1; `
-        }; `
-        `
-        mkdir $Env:ProgramFiles\dotnet; `
-        tar -oxzf dotnet.zip -C $Env:ProgramFiles\dotnet; `
-        Remove-Item -Force dotnet.zip
+    DOTNET_VERSION=8.0.31
 
 RUN setx /M PATH "%PATH%;C:\Program Files\dotnet"
+
+COPY --from=installer ["/dotnet", "/Program Files/dotnet"]

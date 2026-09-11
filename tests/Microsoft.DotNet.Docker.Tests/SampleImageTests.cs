@@ -1,4 +1,4 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -58,11 +58,6 @@ namespace Microsoft.DotNet.Docker.Tests
         [MemberData(nameof(GetImageData))]
         public async Task VerifyAspnetSample(SampleImageData imageData)
         {
-            if (imageData.OS == OS.Bionic && imageData.DockerfileSuffix != "ubuntu-x64")
-            {
-                return;
-            }
-
             await VerifySampleAsync(imageData, SampleImageType.Aspnetapp, async (image, containerName) =>
             {
                 int port = imageData.DockerfileSuffix == "windowsservercore-iis" ? 80 : imageData.DefaultPort;
@@ -91,9 +86,9 @@ namespace Microsoft.DotNet.Docker.Tests
         }
 
         [Fact]
-        public void VerifyComplexAppSample()
+        public void VerifyMultiProjectAppSample()
         {
-            // complexapp sample doesn't currently support building on Windows.
+            // MultiProjectApp sample doesn't currently support building on Windows.
             if (!DockerHelper.IsLinuxContainerModeEnabled)
             {
                 return;
@@ -101,7 +96,7 @@ namespace Microsoft.DotNet.Docker.Tests
 
             string appTag = SampleImageData.GetImageName("complexapp-local-app");
             string testTag = SampleImageData.GetImageName("complexapp-local-test");
-            string sampleFolder = Path.Combine(s_samplesPath, "complexapp");
+            string sampleFolder = Path.Combine(s_samplesPath, "MultiProjectApp");
             string dockerfilePath = $"{sampleFolder}/Dockerfile";
             string testContainerName = ImageData.GenerateContainerName("sample-complex-test");
             string tempDir = null;
@@ -113,13 +108,6 @@ namespace Microsoft.DotNet.Docker.Tests
                 string output = DockerHelper.Run(appTag, containerName);
                 Assert.StartsWith("string: The quick brown fox jumps over the lazy dog", output);
 
-                if (!DockerHelper.IsLinuxContainerModeEnabled &&
-                    DockerHelper.DockerArchitecture.StartsWith("arm", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Skipping run app tests due to a .NET issue: https://github.com/dotnet/runtime/issues/2082
-                    return;
-                }
-
                 // Run the app's tests
                 DockerHelper.Build(testTag, dockerfilePath, target: "test", contextDir: sampleFolder);
                 DockerHelper.Run(testTag, testContainerName, skipAutoCleanup: true);
@@ -127,7 +115,7 @@ namespace Microsoft.DotNet.Docker.Tests
                 // Copy the test log from the container to the host
                 tempDir = Directory.CreateDirectory(
                     Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())).FullName;
-                DockerHelper.Copy($"{testContainerName}:/source/tests/TestResults", tempDir);
+                DockerHelper.Copy($"{testContainerName}:/source/Tests/TestResults", tempDir);
                 string testLogFile = new DirectoryInfo($"{tempDir}/TestResults").GetFiles("*.trx").First().FullName;
 
                 // Open the test log file and verify the tests passed
@@ -162,7 +150,13 @@ namespace Microsoft.DotNet.Docker.Tests
             {
                 if (!imageData.IsPublished)
                 {
-                    string sampleFolder = Path.Combine(s_samplesPath, imageType);
+                    string sampleName = sampleImageType switch
+                    {
+                        SampleImageType.Dotnetapp => "ConsoleApp",
+                        SampleImageType.Aspnetapp => "AspNetCoreRazorApp",
+                        _ => throw new ArgumentOutOfRangeException(nameof(sampleImageType))
+                    };
+                    string sampleFolder = Path.Combine(s_samplesPath, sampleName);
                     string dockerfilePath = $"{sampleFolder}/Dockerfile";
                     if (!string.IsNullOrEmpty(imageData.DockerfileSuffix))
                     {
@@ -191,7 +185,7 @@ namespace Microsoft.DotNet.Docker.Tests
 
             if (imageType == SampleImageType.Aspnetapp)
             {
-                variables.Add(new EnvironmentVariableInfo("ASPNETCORE_HTTP_PORTS", imageData.DefaultPort.ToString()));
+                variables.Add(EnvironmentVariableInfo.Require("ASPNETCORE_HTTP_PORTS", imageData.DefaultPort.ToString()));
             }
 
             EnvironmentVariableInfo.Validate(

@@ -21,7 +21,9 @@ function CopyReadme([string]$containerName, [string]$readmeRelativePath) {
 $onDockerfilesGenerated = {
     param($ContainerName)
 
-    if (-Not $Validate) {
+    # On Windows, ImageBuilder is run locally due to limitations with running Docker client within a container.
+    # Remove linux condition when https://github.com/dotnet/docker-tools/issues/159 is resolved.
+    if ($(Get-DockerOs) -eq "linux" -and -not $Validate) {
         CopyReadme $ContainerName "README.aspire-dashboard.md"
         CopyReadme $ContainerName "README.aspnet.md"
         CopyReadme $ContainerName "README.md"
@@ -34,7 +36,6 @@ $onDockerfilesGenerated = {
 
         CopyReadme $ContainerName ".portal-docs/docker-hub/README.aspire-dashboard.md"
         CopyReadme $ContainerName ".portal-docs/docker-hub/README.aspnet.md"
-        CopyReadme $ContainerName ".portal-docs/docker-hub/README.md"
         CopyReadme $ContainerName ".portal-docs/docker-hub/README.monitor.md"
         CopyReadme $ContainerName ".portal-docs/docker-hub/README.monitor-base.md"
         CopyReadme $ContainerName ".portal-docs/docker-hub/README.runtime-deps.md"
@@ -56,9 +57,9 @@ $onDockerfilesGenerated = {
 function Invoke-GenerateReadme {
     param ([string] $Manifest, [string] $SourceBranch)
 
-    & $PSScriptRoot/../common/Invoke-ImageBuilder.ps1 `
+    & $PSScriptRoot/../docker-tools/Invoke-ImageBuilder.ps1 `
         -ImageBuilderArgs `
-            "generateReadmes --manifest $Manifest --source-branch $SourceBranch$customImageBuilderArgs --var branch=$SourceBranch 'https://github.com/dotnet/dotnet-docker'" `
+            "generateReadmes --manifest $Manifest --source-branch $SourceBranch$customImageBuilderArgs --var branch=$SourceBranch 'https://github.com/dotnet/dotnet-docker' --no-version-logging" `
         -OnCommandExecuted $onDockerfilesGenerated
 }
 

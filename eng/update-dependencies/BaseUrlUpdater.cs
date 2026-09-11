@@ -3,11 +3,12 @@
 
 using System;
 using System.Collections.Generic;
+using System.Data;
+using System.Diagnostics;
 using System.Linq;
 using Microsoft.DotNet.VersionTools.Dependencies;
 using Newtonsoft.Json.Linq;
 
-#nullable enable
 namespace Dotnet.Docker;
 
 /// <summary>
@@ -16,40 +17,86 @@ namespace Dotnet.Docker;
 internal class BaseUrlUpdater : FileRegexUpdater
 {
     private const string BaseUrlGroupName = "BaseUrlValue";
-    private readonly Options _options;
-    private readonly JObject _manifestVariables;
+    private readonly SpecificCommandOptions _options;
+    private readonly ManifestVariables _manifestVariables;
+    private readonly string _manifestVariableName;
 
-    public BaseUrlUpdater(string repoRoot, Options options)
+    /// <summary>
+    /// Creates a new <see cref="IDependencyUpdater"/> for updating base URLs.
+    /// If the base URL variable cannot be found in the manifest, the updater
+    /// won't do anything.
+    /// </summary>
+    public static IEnumerable<IDependencyUpdater> CreateUpdaters(ManifestVariables manifestVariables, SpecificCommandOptions options)
     {
-        Path = System.IO.Path.Combine(repoRoot, UpdateDependencies.VersionsFilename);
-        VersionGroupName = BaseUrlGroupName;
-        Regex = ManifestHelper.GetManifestVariableRegex(
-            ManifestHelper.GetBaseUrlVariableName(options.DockerfileVersion, options.SourceBranch, options.VersionSourceName),
-            $"(?<{BaseUrlGroupName}>.+)");
-        _options = options;
+        if (manifestVariables is null)
+        {
+            Trace.TraceWarning("BaseUrlUpdater: manifest variables missing - skipping base URL update.");
+            return [];
+        }
 
-        _manifestVariables = (JObject?)ManifestHelper.LoadManifest(UpdateDependencies.VersionsFilename)["variables"] ??
-            throw new InvalidOperationException($"'{UpdateDependencies.VersionsFilename}' property missing in '{UpdateDependencies.VersionsFilename}'"); ;
+        var upstreamBranch = manifestVariables.GetValue("branch");
+        var baseUrlVarNames = ManifestHelper.GetBaseUrlVariableNames(
+            dockerfileVersion: options.DockerfileVersion,
+            branch: upstreamBranch,
+            versionSourceName: options.VersionSourceName,
+            sdkOnlyRelease: options.IsSdkOnly);
+
+        IEnumerable<IDependencyUpdater> updaters = baseUrlVarNames
+            .SelectMany(variable => CreateUpdater(variable, manifestVariables, options));
+
+        return updaters;
+    }
+
+    private static IEnumerable<IDependencyUpdater> CreateUpdater(
+        string baseUrlVarName,
+        ManifestVariables manifestVariables,
+        SpecificCommandOptions options)
+    {
+        var variableHasValue = manifestVariables.HasValue(baseUrlVarName);
+
+        if (!variableHasValue)
+        {
+            Trace.TraceWarning($"BaseUrlUpdater: variable '{baseUrlVarName}' not found - skipping base URL update.");
+            return [];
+        }
+
+        return [new BaseUrlUpdater(options, manifestVariables, baseUrlVarName)];
+    }
+
+    private BaseUrlUpdater(
+        SpecificCommandOptions options,
+        ManifestVariables manifestVariables,
+        string manifestVariableName)
+    {
+        Path = options.GetManifestVersionsFilePath();
+        VersionGroupName = BaseUrlGroupName;
+        _options = options;
+        _manifestVariables = manifestVariables;
+        _manifestVariableName = manifestVariableName;
+
+        Regex = ManifestHelper.GetManifestVariableRegex(_manifestVariableName, $"(?<{BaseUrlGroupName}>.+)");
     }
 
     protected override string TryGetDesiredValue(IEnumerable<IDependencyInfo> dependencyInfos, out IEnumerable<IDependencyInfo> usedDependencyInfos)
     {
         usedDependencyInfos = Enumerable.Empty<IDependencyInfo>();
 
-        string baseUrlVersionVarName = ManifestHelper.GetBaseUrlVariableName(_options.DockerfileVersion, _options.SourceBranch, _options.VersionSourceName);
-        string unresolvedBaseUrl = _manifestVariables[baseUrlVersionVarName]?.ToString() ??
+        string baseUrlVersionVarName = _manifestVariableName;
+        string unresolvedBaseUrl = _manifestVariables.Variables[baseUrlVersionVarName]?.ToString() ??
             throw new InvalidOperationException($"Variable with name '{baseUrlVersionVarName}' is missing.");
 
         if (_options.IsInternal)
         {
-            if (!_options.ProductVersions.TryGetValue("sdk", out string? sdkVersion) || string.IsNullOrEmpty(sdkVersion))
+            if (string.IsNullOrEmpty(_options.InternalBaseUrl))
             {
-                throw new InvalidOperationException("The sdk version must be set in order to derive the build's blob storage location.");
+                throw new InvalidOperationException("InternalBaseUrl must be set in order to update base url for internal builds");
             }
 
-            sdkVersion = sdkVersion.Replace(".", "-");
-
-            unresolvedBaseUrl = $"https://dotnetstage.blob.core.windows.net/{sdkVersion}-internal";
+            unresolvedBaseUrl = _options.InternalBaseUrl;
+        }
+        else if (_options.ReleaseState.HasValue)
+        {
+            unresolvedBaseUrl = $"$({ManifestHelper.GetBaseUrlVariableName(_options.ReleaseState.Value, _options.TargetBranch)})";
         }
         else
         {
@@ -60,4 +107,3 @@ internal class BaseUrlUpdater : FileRegexUpdater
         return unresolvedBaseUrl;
     }
 }
-#nullable disable

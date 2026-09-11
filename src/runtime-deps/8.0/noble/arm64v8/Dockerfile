@@ -19,6 +19,7 @@ RUN apt-get update \
         libssl3t64 \
         libstdc++6 \
         tzdata \
+        tzdata-legacy \
         zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
@@ -26,7 +27,7 @@ RUN apt-get update \
 RUN groupadd \
         --gid=$APP_UID \
         app \
-    && useradd -l \
+    && useradd --no-log-init \
         --uid=$APP_UID \
         --gid=$APP_UID \
         --create-home \

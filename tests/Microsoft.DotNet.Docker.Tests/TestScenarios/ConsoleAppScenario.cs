@@ -5,17 +5,9 @@ using Xunit.Abstractions;
 
 namespace Microsoft.DotNet.Docker.Tests;
 
-public class ConsoleAppScenario : ProjectTemplateTestScenario
+public abstract class ConsoleAppScenario : ProjectTemplateTestScenario
 {
     protected override string SampleName { get; } = "console";
-
-    protected override string BuildStageTarget { get; } = "build";
-
-    protected override string? TestStageTarget { get; } = "test";
-
-    protected override string[] AppStageTargets { get; } = DockerHelper.IsLinuxContainerModeEnabled
-        ? ["fx_dependent_app", "self_contained_app"]
-        : ["fx_dependent_app"];
 
     protected override DotNetImageRepo RuntimeImageRepo { get; } = DotNetImageRepo.Runtime;
 
@@ -40,9 +32,33 @@ public class ConsoleAppScenario : ProjectTemplateTestScenario
         }
         finally
         {
-            DockerHelper.DeleteContainer(containerName);
+            DockerHelper.DeleteContainer(containerName, captureLogs: true);
         }
 
         return Task.FromResult(0);
+    }
+
+    public class FxDependent(ProductImageData imageData, DockerHelper dockerHelper, ITestOutputHelper outputHelper)
+        : ConsoleAppScenario(imageData, dockerHelper, outputHelper)
+    {
+        protected override TestDockerfile Dockerfile =>
+            TestDockerfileBuilder.GetDefaultDockerfile(PublishConfig.FxDependent);
+    }
+
+    public class SelfContained(ProductImageData imageData, DockerHelper dockerHelper, ITestOutputHelper outputHelper)
+        : ConsoleAppScenario(imageData, dockerHelper, outputHelper)
+    {
+        protected override DotNetImageRepo RuntimeImageRepo { get; } = DotNetImageRepo.Runtime_Deps;
+
+        protected override TestDockerfile Dockerfile =>
+            TestDockerfileBuilder.GetDefaultDockerfile(PublishConfig.SelfContained);
+    }
+
+    public class TestProject(ProductImageData imageData, DockerHelper dockerHelper, ITestOutputHelper outputHelper)
+        : ConsoleAppScenario(imageData, dockerHelper, outputHelper)
+    {
+        protected override bool NonRootUserSupported => false;
+        protected override TestDockerfile Dockerfile { get; } =
+            TestDockerfileBuilder.GetTestProjectDockerfile();
     }
 }

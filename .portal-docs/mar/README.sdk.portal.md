@@ -12,37 +12,39 @@ Watch [discussions](https://github.com/dotnet/dotnet-docker/discussions/categori
 
 ## Featured Tags
 
+* `10.0` (Long-Term Support)
+  * `docker pull mcr.microsoft.com/dotnet/sdk:10.0`
+* `9.0` (Standard Support)
+  * `docker pull mcr.microsoft.com/dotnet/sdk:9.0`
 * `8.0` (Long-Term Support)
   * `docker pull mcr.microsoft.com/dotnet/sdk:8.0`
-* `6.0` (Long-Term Support)
-  * `docker pull mcr.microsoft.com/dotnet/sdk:6.0`
 
 ## Related Repositories
 
 .NET:
 
 * [dotnet](https://mcr.microsoft.com/catalog?search=dotnet): .NET
-* [dotnet/aspnet](https://mcr.microsoft.com/product/dotnet/aspnet/about): ASP.NET Core Runtime
-* [dotnet/runtime](https://mcr.microsoft.com/product/dotnet/runtime/about): .NET Runtime
-* [dotnet/runtime-deps](https://mcr.microsoft.com/product/dotnet/runtime-deps/about): .NET Runtime Dependencies
-* [dotnet/monitor](https://mcr.microsoft.com/product/dotnet/monitor/about): .NET Monitor Tool
-* [dotnet/aspire-dashboard](https://mcr.microsoft.com/product/dotnet/aspire-dashboard/about): .NET Aspire Dashboard
-* [dotnet/samples](https://mcr.microsoft.com/product/dotnet/samples/about): .NET Samples
-* [dotnet/nightly/sdk](https://mcr.microsoft.com/product/dotnet/nightly/sdk/about): .NET SDK (Preview)
+* [dotnet/aspnet](https://mcr.microsoft.com/artifact/mar/dotnet/aspnet/about): ASP.NET Core Runtime
+* [dotnet/runtime](https://mcr.microsoft.com/artifact/mar/dotnet/runtime/about): .NET Runtime
+* [dotnet/runtime-deps](https://mcr.microsoft.com/artifact/mar/dotnet/runtime-deps/about): .NET Runtime Dependencies
+* [dotnet/monitor](https://mcr.microsoft.com/artifact/mar/dotnet/monitor/about): .NET Monitor Tool
+* [dotnet/aspire-dashboard](https://mcr.microsoft.com/artifact/mar/dotnet/aspire-dashboard/about): Aspire Dashboard
+* [dotnet/nightly/sdk](https://mcr.microsoft.com/artifact/mar/dotnet/nightly/sdk/about): .NET SDK (Preview)
+* [dotnet/samples](https://mcr.microsoft.com/artifact/mar/dotnet/samples/about): .NET Samples
 
 .NET Framework:
 
 * [dotnet/framework](https://mcr.microsoft.com/catalog?search=dotnet/framework): .NET Framework, ASP.NET and WCF
-* [dotnet/framework/samples](https://mcr.microsoft.com/product/dotnet/framework/samples/about): .NET Framework, ASP.NET and WCF Samples
+* [dotnet/framework/samples](https://mcr.microsoft.com/artifact/mar/dotnet/framework/samples/about): .NET Framework, ASP.NET and WCF Samples
 
 ## Usage
 
-The [.NET Docker samples](https://github.com/dotnet/dotnet-docker/blob/main/samples/README.md) show various ways to use .NET and Docker together. See [Building Docker Images for .NET Applications](https://docs.microsoft.com/dotnet/core/docker/building-net-docker-images) to learn more.
+The [.NET Docker samples](https://github.com/dotnet/dotnet-docker/blob/main/samples/README.md) show various ways to use .NET and Docker together. See [Introduction to .NET and Docker](https://learn.microsoft.com/dotnet/core/docker/introduction) to learn more.
 
 ### Building .NET Apps with Docker
 
-* [.NET Docker Sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/dotnetapp/README.md) - This [sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/dotnetapp/Dockerfile) builds, tests, and runs the sample. It includes and builds multiple projects.
-* [ASP.NET Core Docker Sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/aspnetapp/README.md) - This [sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/aspnetapp/Dockerfile) demonstrates using Docker with an ASP.NET Core Web App.
+* [.NET Docker Sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/ConsoleApp/README.md) - This [sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/ConsoleApp/Dockerfile) builds, tests, and runs the sample. It includes and builds multiple projects.
+* [ASP.NET Core Docker Sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/AspNetCoreRazorApp/README.md) - This [sample](https://github.com/dotnet/dotnet-docker/blob/main/samples/AspNetCoreRazorApp/Dockerfile) demonstrates using Docker with an ASP.NET Core Web App.
 
 ### Develop .NET Apps in a Container
 
@@ -67,13 +69,16 @@ The [Image Variants documentation](https://github.com/dotnet/dotnet-docker/blob/
 
 ### Image Update Policy
 
-* We update supported .NET images within 12 hours of any updates to their base images (e.g. debian:bookworm-slim, windows/nanoserver:ltsc2022, etc.).
-* We re-build all .NET images as part of releasing new versions of .NET including new major/minor versions and servicing.
-* Distroless images such as Ubuntu Chiseled have no base image, and as such will only be updated with .NET releases and CVE fixes as described below.
+* **Base Image Updates:** Images are re-built within 12 hours of any updates to their base images (e.g. debian:bookworm-slim, windows/nanoserver:ltsc2022, etc.).
+* **.NET Releases:** Images are re-built as part of releasing new .NET versions. This includes new major versions, minor versions, and servicing releases.
+* **Critical CVEs:** Images are re-built to pick up critical CVE fixes as described by the CVE Update Policy below.
+* **Monthly Re-builds:** Images are re-built monthly, typically on the second Tuesday of the month, in order to pick up lower-severity CVE fixes.
+* **Out-Of-Band Updates:** Images can sometimes be re-built when out-of-band updates are necessary to address critical issues. If this happens, new fixed version tags will be updated according to the [Fixed version tags documentation](https://github.com/dotnet/dotnet-docker/blob/main/documentation/supported-tags.md#fixed-version-tags).
 
 #### CVE Update Policy
 
 .NET container images are regularly monitored for the presence of CVEs. A given image will be rebuilt to pick up fixes for a CVE when:
+
 * We detect the image contains a CVE with a [CVSS](https://nvd.nist.gov/vuln-metrics/cvss) score of "Critical"
 * **AND** the CVE is in a package that is added in our Dockerfile layers (meaning the CVE is in a package we explicitly install or any transitive dependencies of those packages)
 * **AND** there is a CVE fix for the package available in the affected base image's package repository.

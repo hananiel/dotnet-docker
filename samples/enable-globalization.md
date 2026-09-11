@@ -4,7 +4,7 @@
 
 The .NET team has various policies for making these libraries available in containers and for configuring the .NET product to use them (or not).
 
-The [globalapp](globalapp/README.md) samples demonstrates using globalization capabilities in containers.
+The [ConsoleAppWithGlobalization](ConsoleAppWithGlobalization/README.md) samples demonstrates using globalization capabilities in containers.
 
 ## ICU
 
@@ -30,16 +30,16 @@ Some users want to add ICU to one of the image types that doesn't include it. It
 
 When using `Microsoft.Data.SqlClient` or Entity Framework Core without ICU installed, the following exception may be thrown when attempting to connect to a database:
 
-```
+```text
 System.Globalization.CultureNotFoundException: Only the invariant culture is supported in globalization-invariant mode. See https://aka.ms/GlobalizationInvariantMode for more information. (Parameter 'name')
 en-us is an invalid culture identifier.
 ```
 
-This is by design. `Microsoft.Data.SqlClient` requires ICU to be installed. See https://github.com/dotnet/SqlClient/issues/220 for more information.
+This is by design. `Microsoft.Data.SqlClient` requires ICU to be installed. See this [Sql Client issue](https://github.com/dotnet/SqlClient/issues/220) for more information.
 
 ### Alpine images
 
-ICU can be added to a .NET Alpine image by adding the following instructions to the final stage within a `Dockerfile`, as demonstrated in [Dockerfile.alpine-icu](aspnetapp/Dockerfile.alpine-icu). This Dockerfile fragment adds and configures ICU and disables Globalization invariant mode.
+ICU can be added to a .NET Alpine image by adding the following instructions to the final stage within a `Dockerfile`, as demonstrated in [Dockerfile.alpine-icu](AspNetCoreRazorApp/Dockerfile.alpine-icu). This Dockerfile fragment adds and configures ICU and disables Globalization invariant mode.
 
 ```Dockerfile
 ENV \
@@ -54,7 +54,7 @@ RUN apk add --no-cache \
 
 ### Ubuntu chiseled images
 
-ICU can be added to an Ubuntu chiseled image, as demonstrated by https://github.com/ubuntu-rocks/dotnet/issues/21.
+ICU can be added to an Ubuntu chiseled image, as demonstrated in this [chisel issue](https://github.com/ubuntu-rocks/dotnet/issues/21).
 
 ## Tzdata
 

@@ -3,71 +3,94 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Collections.Generic;
-using System.Linq;
-using Xunit;
+using FluentAssertions;
+using FluentAssertions.Execution;
 
+#nullable enable
 namespace Microsoft.DotNet.Docker.Tests
 {
-    public class EnvironmentVariableInfo
+    public record EnvironmentVariableInfo
     {
-        public bool AllowAnyValue { get; private set; }
-        public string ExpectedValue { get; private set; }
-        public string Name { get; private set; }
-        public bool IsProductVersion { get; set; }
+        public bool AllowAnyValue { get; init; } = false;
+        public string? ExpectedValue { get; init; } = null;
+        public string Name { get; init; }
+        public bool IsProductVersion { get; init; } = false;
 
-        public EnvironmentVariableInfo(string name, string expectedValue)
+        /// <summary>
+        /// When true, the variable is expected to NOT be set on the image.
+        /// </summary>
+        public bool ShouldNotExist { get; init; } = false;
+
+        private EnvironmentVariableInfo(string name)
         {
             Name = name;
-            ExpectedValue = expectedValue;
         }
 
-        public EnvironmentVariableInfo(string name, bool allowAnyValue)
-        {
-            Name = name;
-            AllowAnyValue = allowAnyValue;
-        }
+        /// <summary>
+        /// Requires the named environment variable to be set to <paramref name="expectedValue"/>.
+        /// </summary>
+        public static EnvironmentVariableInfo Require(string name, string expectedValue) =>
+            new(name) { ExpectedValue = expectedValue };
+
+        /// <summary>
+        /// Requires the named environment variable to be set to any non-empty value.
+        /// </summary>
+        public static EnvironmentVariableInfo Require(string name) =>
+            new(name) { AllowAnyValue = true };
+
+        /// <summary>
+        /// Requires the named environment variable to NOT be set on the image.
+        /// </summary>
+        public static EnvironmentVariableInfo Forbid(string name) =>
+            new(name) { ShouldNotExist = true };
 
         public static void Validate(
-            IEnumerable<EnvironmentVariableInfo> variables,
+            IEnumerable<EnvironmentVariableInfo> expectedVariables,
             string imageName,
             ImageData imageData,
             DockerHelper dockerHelper)
         {
-            IDictionary<string, string> actualValues = dockerHelper.GetEnvironmentVariables(imageName);
+            IDictionary<string, string> environmentVariables = dockerHelper.GetEnvironmentVariables(imageName);
 
-            foreach (EnvironmentVariableInfo variable in variables)
+            using (new AssertionScope())
             {
-                bool isFound = actualValues.TryGetValue(variable.Name, out string actualValue);
-                Assert.True(isFound, $"Variable '{variable.Name}' is not defined in image '{imageName}'.");
-
-                if (variable.AllowAnyValue)
+                foreach (EnvironmentVariableInfo variable in expectedVariables)
                 {
-                    Assert.NotEmpty(actualValue);
-                }
-                else
-                {
-                    // If we're validating a product version environment variable for an internal build
-                    // we need to trim off the "servicing" or "rtm" part of the version value.
-                    if (variable.IsProductVersion && !string.IsNullOrEmpty(Config.SasQueryString))
+                    if (variable.ShouldNotExist)
                     {
-                        int servicingIndex = actualValue.IndexOf("-servicing.");
-                        if (servicingIndex != -1)
-                        {
-                            actualValue = actualValue.Substring(0, servicingIndex);
-                        }
-                        else
-                        {
-                            int rtmIndex = actualValue.IndexOf("-rtm.");
-                            if (rtmIndex != -1)
-                            {
-                                actualValue = actualValue.Substring(0, rtmIndex);
-                            }
-                        }
+                        environmentVariables.Should().NotContainKey(
+                            variable.Name,
+                            because: $"{imageName} should not have the environment variable '{variable.Name}' defined");
+                        continue;
                     }
 
-                    Assert.Equal(variable.ExpectedValue, actualValue);
+                    string environmentVariable = environmentVariables.Should()
+                        .ContainKey(
+                            variable.Name,
+                            because: $"{imageName} should have the environment variable '{variable.Name}' defined")
+                        .WhoseValue;
+
+                    if (variable.AllowAnyValue)
+                    {
+                        environmentVariable.Should().NotBeNullOrEmpty(
+                            because: $"environment variable {variable.Name} is allowed to have any value");
+                    }
+                    else
+                    {
+                        // If we're validating a product version environment variable for a stable build
+                        // we need to trim off the "servicing" or "rtm" part of the version value.
+                        if (variable.IsProductVersion && Config.IsInternal)
+                        {
+                            environmentVariable = ImageVersion.TrimBuildVersionForRelease(environmentVariable);
+                        }
+
+                        environmentVariable.Should().Be(variable.ExpectedValue,
+                            because: $"{imageName} should have the environment variable "
+                                + $"'{variable.Name}' set to '{variable.ExpectedValue}'");
+                    }
                 }
             }
+
         }
     }
 }

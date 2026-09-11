@@ -14,8 +14,17 @@ resources:
       - real signed
 trigger: none
 pr: none
+
+parameters:
+  - name: skipPullRequest
+    displayName: Skip Pull Request
+    type: boolean
+    default: false
+
 variables:
-- template: ../common/templates/variables/dotnet/common.yml
+- template: /eng/docker-tools/templates/variables/dotnet/common.yml@self
+- template: /eng/docker-tools/templates/variables/dotnet/secrets.yml@self
+
 stages:
 - stage: Monitor
   jobs:
@@ -30,11 +39,14 @@ stages:
     - pwsh: $(engPath)/Get-MonitorDropVersions.ps1 -BuildVersionFilePath "$(Pipeline.Workspace)/dotnet-monitor/Build_Info/dotnet-monitor.nupkg.buildversion"
       displayName: Get Versions
     - powershell: |
+        Import-Module -force $(engPath)/DependencyManagement.psm1
+
         $scriptArgs = @{
           ProductVersion = "$(monitorMajorMinorVersion)"
           MonitorVersion = "$(monitorVer)"
           AzdoVariableName = 'updateDepsArgs'
           UseStableBranding = [bool]::Parse("$(stableBranding)")
+          ReleaseState = $(Get-ProductReleaseState)
         }
 
         $(engPath)/Set-DotnetVersions.ps1 @scriptArgs
@@ -43,6 +55,7 @@ stages:
         $customArgsArray = @("$(updateDepsArgs)")
         echo "##vso[task.setvariable variable=customArgsArray]$($customArgsArray | ConvertTo-Json -Compress -AsArray)"
       displayName: Set Custom Args
-    - template: steps/update-dependencies.yml
+    - template: steps/update-dependencies-specific.yml
       parameters:
         customArgsArray: $(customArgsArray)
+        skipPullRequest: ${{ parameters.skipPullRequest }}

@@ -2,7 +2,7 @@
 
 Enable graceful shutdown of an app, particularly with long-running code. This pattern is described in more depth in [Graceful shutdown of ASP.NET-based applications](graceful-shutdown.md).
 
-The [following pattern](https://github.com/dotnet/dotnet-docker/blob/main/samples/aspnetapp/aspnetapp/Program.cs#L30-L55) can be used:
+The [following pattern](https://github.com/dotnet/dotnet-docker/blob/main/samples/AspNetCoreRazorApp/AspNetCoreRazorApp/Program.cs#L30-L55) can be used:
 
 ```csharp
 CancellationTokenSource cancellation = new();
@@ -33,8 +33,8 @@ Test the pattern with a single replica deployment. This test requires multiple t
 First terminal:
 
 ```bash
-$ kubectl apply -f https://raw.githubusercontent.com/dotnet/dotnet-docker/main/samples/kubernetes/hello-dotnet/hello-dotnet.yaml
-$ kubectl port-forward service/hello-dotnet 8080:80
+kubectl apply -f https://raw.githubusercontent.com/dotnet/dotnet-docker/main/samples/kubernetes/hello-dotnet/hello-dotnet.yaml
+kubectl port-forward service/hello-dotnet 8080:80
 ```
 
 Second terminal:

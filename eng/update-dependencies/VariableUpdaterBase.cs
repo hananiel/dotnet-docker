@@ -5,7 +5,6 @@ using System;
 using Microsoft.DotNet.VersionTools.Dependencies;
 using Newtonsoft.Json.Linq;
 
-#nullable enable
 namespace Dotnet.Docker;
 
 internal abstract class VariableUpdaterBase : FileRegexUpdater
@@ -13,10 +12,10 @@ internal abstract class VariableUpdaterBase : FileRegexUpdater
     protected string VariableName { get; }
     protected Lazy<JObject> ManifestVariables { get; }
 
-    public VariableUpdaterBase(string repoRoot, string variableName)
+    public VariableUpdaterBase(string manifestVersionsFilePath, string variableName)
     {
         VariableName = variableName;
-        Path = System.IO.Path.Combine(repoRoot, UpdateDependencies.VersionsFilename);
+        Path = manifestVersionsFilePath;
         VersionGroupName = "val";
         Regex = ManifestHelper.GetManifestVariableRegex(variableName, @$"(?<{VersionGroupName}>\S*)");
 
@@ -24,10 +23,10 @@ internal abstract class VariableUpdaterBase : FileRegexUpdater
             () =>
             {
                 const string VariablesProperty = "variables";
-                JToken? variables = ManifestHelper.LoadManifest(UpdateDependencies.VersionsFilename)[VariablesProperty];
+                JToken? variables = ManifestHelper.LoadManifest(manifestVersionsFilePath)[VariablesProperty];
                 if (variables is null)
                 {
-                    throw new InvalidOperationException($"'{VariablesProperty}' property missing in '{UpdateDependencies.VersionsFilename}'");
+                    throw new InvalidOperationException($"'{VariablesProperty}' property missing in '{manifestVersionsFilePath}'");
                 }
                 return (JObject)variables;
             });
